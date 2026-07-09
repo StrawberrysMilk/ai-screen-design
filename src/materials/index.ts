@@ -1,17 +1,29 @@
+import type { Component } from 'vue'
 import type { MaterialDefinition } from '@/materials/type.ts'
 
 const materials: MaterialDefinition[] = []
 
-export function register(material: MaterialDefinition) {
+// text =>> TextMaterial
+// bar =>> ChartsMaterial
+const componentMap = new Map<string, Component>()
+export function register(material: MaterialDefinition, component?: Component) {
   materials.push(material)
+  if (component) {
+    componentMap.set(material.schema.type, component)
+  }
 }
 
-const materialModules = import.meta.glob('./*/index.ts', { eager: true })
-Object.values(materialModules).forEach((module) => {
-  // @ts-ignore
-  if (module.install) {
-    // @ts-ignore
-    module.install(register)
+// 定义模块具备install方法的类型约束
+type Register = typeof register
+type InstallableModule = {
+  install?: (register: Register) => void
+}
+const materialModules: Record<string, unknown> = import.meta.glob('./*/index.ts', { eager: true })
+Object.values(materialModules).forEach((module: unknown) => {
+  // 类型守卫做类型缩小
+  const mod = module as InstallableModule
+  if (mod.install) {
+    mod.install(register)
   }
 })
 
@@ -26,4 +38,15 @@ export function getMaterialsByGroup(group: string) {
 
 export function getMaterialsGroupt() {
   return groups
+}
+
+export function getMaterialComponent(type: string) {
+  return componentMap.get(type)
+}
+
+export function createNode(node) {
+  return {
+    ...node,
+    id: crypto.randomUUID(),
+  }
 }

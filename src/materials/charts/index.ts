@@ -1,4 +1,5 @@
 import type { MaterialDefinition } from '@/materials/type.ts'
+import ChartsMaterial from '@/materials/charts/component.vue'
 
 const chartMaterial: MaterialDefinition = {
   name: '柱状图',
@@ -20,5 +21,5 @@ const chartMaterial: MaterialDefinition = {
 }
 
 export function install(register) {
-  register(chartMaterial)
+  register(chartMaterial, ChartsMaterial)
 }
