@@ -15,7 +15,7 @@ const textMaterial: MaterialDefinition = {
       height: 50,
     },
     style: {
-      color: 'black',
+      color: 'white',
     },
     props: {
       content: 'hello world',
