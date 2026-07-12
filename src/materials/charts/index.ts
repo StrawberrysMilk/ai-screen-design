@@ -1,5 +1,5 @@
-import type { MaterialDefinition } from '@/materials/type.ts'
 import ChartsMaterial from '@/materials/charts/component.vue'
+import type { MaterialDefinition } from '@/schema/material.ts'
 
 const chartMaterial: MaterialDefinition = {
   name: '柱状图',

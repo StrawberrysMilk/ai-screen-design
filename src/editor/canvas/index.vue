@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { MaterialSchema } from '@/materials/type.ts'
 import { createNode, getMaterialComponent } from '@/materials'
 import Moveable, {
   type OnDrag,
@@ -10,6 +9,10 @@ import Moveable, {
 import { storeToRefs } from 'pinia'
 import { useEditorStore } from '@/stores/editor.ts'
 import Selecto from 'vue3-selecto'
+import SketchRuler from 'vue3-sketch-ruler'
+import 'vue3-sketch-ruler/lib/style.css'
+import { debounce } from '@/utils'
+import type { MaterialSchema } from '@/schema/material.ts'
 
 defineOptions({
   name: 'CanvasRoot',
@@ -17,15 +20,81 @@ defineOptions({
 
 const editorStore = useEditorStore()
 
-const { nodes } = storeToRefs(editorStore)
+const { nodes, selectedNodeIds, canvas } = storeToRefs(editorStore)
 
 const moveableRef = useTemplateRef('moveable')
 const stageRef = useTemplateRef('stage')
+const canvasRootRef = useTemplateRef('canvasRoot')
 
-const selectedTagrt = shallowRef<HTMLElement>()
+const selectedTagrt = shallowRef<HTMLElement[]>()
 
 const vm = getCurrentInstance()
 
+const canvasWidth = toRef(canvas.value, 'width')
+const canvasHeight = toRef(canvas.value, 'height')
+
+const canvasStyle = computed(() => {
+  return {
+    width: `${canvasWidth.value}px`,
+    height: `${canvasHeight.value}px`,
+    backgroundColor: canvas.value.backgroundColor,
+  }
+})
+
+const lines = ref({ h: [], v: [] })
+const rectWidth = ref(1000)
+const rectHight = ref(800)
+const scale = ref(1)
+
+const palette = {
+  bgColor: '#1f2937',
+  longfgColor: '#6b7280',
+  fontColor: '#9ca3af',
+  fontShadowColor: 'rgba(14, 141, 167, 0.14)',
+  lineColor: '#22c55e',
+  lineType: 'solid',
+  lockLineColor: '#4b5563',
+  borderColor: '#374151',
+  hoverBg: '#111827',
+  hoverColor: '#ffffff',
+}
+
+watch(
+  selectedNodeIds,
+  (ids) => {
+    selectedTagrt.value = ids.map((id) => {
+      return stageRef.value.querySelector(`[data-node-id='${id}']`)
+    })
+  },
+  { deep: true, flush: 'post' },
+)
+
+const onRootResize = debounce((rect) => {
+  rectWidth.value = rect.width
+  rectHight.value = rect.height
+}, 300)
+
+onMounted(() => {
+  const { width, height } = canvasRootRef.value.getBoundingClientRect()
+  rectWidth.value = width
+  rectHight.value = height
+
+  const ob = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    const rect = entry.contentRect
+    onRootResize(rect)
+  })
+  ob.observe(canvasRootRef.value)
+
+  onUnmounted(() => {
+    ob.disconnect()
+  })
+})
+
+/**
+ * 拖拽放置元素
+ * @param e
+ */
 function onDrop(e: DragEvent) {
   const data = e.dataTransfer.getData('schema')
   const node = createNode(JSON.parse(data))
@@ -34,10 +103,6 @@ function onDrop(e: DragEvent) {
   node.layout.y = e.clientY - stageRect.top - node.layout.height / 2
   editorStore.addNode(node)
   editorStore.selectNode(node.id)
-  // 这个时候还没渲染出来
-  nextTick(() => {
-    selectedTagrt.value = vm.proxy.$el.querySelector(`[data-node-id='${node.id}']`) as HTMLElement
-  })
 }
 
 /**
@@ -45,17 +110,17 @@ function onDrop(e: DragEvent) {
  * 尺寸：改 css height width
  * @param node
  */
-function getNodeStyle(node: MaterialSchema) {
+function getNodeStyle(node: MaterialSchema, index: number) {
   return {
     left: `${node.layout.x}px`,
     top: `${node.layout.y}px`,
     width: `${node.layout.width}px`,
     height: `${node.layout.height}px`,
+    zIndex: index + 1,
   }
 }
 
 function onSelect(node: MaterialSchema, e: MouseEvent) {
-  selectedTagrt.value = e.currentTarget as HTMLElement
   editorStore.selectNode(node.id)
 
   nextTick(() => {
@@ -87,11 +152,9 @@ function OnResize(e: OnResize) {
 
 function onClearSelected() {
   editorStore.clearSelected()
-  selectedTagrt.value = null
 }
 
 function onSelectEnd(e) {
-  selectedTagrt.value = e.selected
   const ids = e.selected.map((el) => el.getAttribute('data-node-id'))
   editorStore.selectNodes(ids)
 }
@@ -112,28 +175,48 @@ function onDragGroup(e: OnDragGroup) {
 function OnResizeGroup(e: OnResizeGroup) {
   e.events.forEach(OnResize)
 }
+
+/**
+ * 缩放改变时，更新moveable的rect
+ */
+function onZoomChange() {
+  moveableRef.value.updateRect()
+}
 </script>
 
 <template>
-  <div class="canvas-root">
-    <div
-      ref="stage"
-      class="canvas-stage w-900 h-600 m-100"
-      @dragover.prevent
-      @drop="onDrop"
-      @mousedown.self="onClearSelected"
+  <div class="canvas-root" ref="canvasRoot">
+    <SketchRuler
+      v-model:scale="scale"
+      :thick="20"
+      :palette="palette"
+      :width="rectWidth"
+      :height="rectHight"
+      :canvasWidth="canvasWidth"
+      :canvasHeight="canvasHeight"
+      :lines="lines"
+      @zoomchange="onZoomChange"
     >
       <div
-        v-for="node in nodes"
-        :key="node.id"
-        class="canvas-node absolute"
-        :style="getNodeStyle(node)"
-        :data-node-id="node.id"
-        @mousedown="onSelect(node, $event)"
+        ref="stage"
+        class="canvas-stage"
+        :style="canvasStyle"
+        @dragover.prevent
+        @drop="onDrop"
+        @mousedown.self="onClearSelected"
       >
-        <component :is="getMaterialComponent(node.type)" :schema="node" />
+        <div
+          v-for="(node, index) in nodes"
+          :key="node.id"
+          class="canvas-node absolute"
+          :style="getNodeStyle(node, index)"
+          :data-node-id="node.id"
+          @mousedown="onSelect(node, $event)"
+        >
+          <component :is="getMaterialComponent(node.type)" :schema="node" />
+        </div>
       </div>
-    </div>
+    </SketchRuler>
     <Selecto
       v-if="stageRef"
       :container="stageRef"
@@ -161,7 +244,6 @@ function OnResizeGroup(e: OnResizeGroup) {
 .canvas-root {
   .canvas-stage {
     position: relative;
-    background: bg-mix(60);
     .canvas-node {
     }
   }
