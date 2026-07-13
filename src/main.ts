@@ -2,7 +2,7 @@ import { createApp } from 'vue'
 import { createPinia } from 'pinia'
 import { Icon } from '@iconify/vue'
 // import ElementPlus from 'element-plus'
-// import 'element-plus/dist/index.css'
+import 'element-plus/dist/index.css'
 import './styles/index.css'
 import 'element-plus/theme-chalk/dark/css-vars.css'
 

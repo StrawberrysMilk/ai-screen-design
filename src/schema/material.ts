@@ -9,9 +9,17 @@ export interface MaterialSchema {
   type: string
   name: string
   id: string
+  locked: boolean
   layout: Layout
   style?: Record<string, any>
   props: Record<string, any>
+}
+
+export interface settersSchema {
+  key: string
+  label: string
+  type: string
+  [key: string]: any
 }
 
 export interface MaterialDefinition {
@@ -19,6 +27,7 @@ export interface MaterialDefinition {
   name: string
   icon: string
   group: string
-  schema: Omit<MaterialSchema, 'id'>
   // endregion
+  setters: settersSchema[]
+  schema: Omit<MaterialSchema, 'id'>
 }

@@ -74,6 +74,61 @@ export const useEditorStore = defineStore('editor', () => {
     selectedNodeIds.value = []
   }
 
+  /**
+   * 复制节点
+   * @param node
+   */
+  function copyNode(node: MaterialSchema) {
+    const newNode = JSON.parse(JSON.stringify(node))
+    newNode.id = crypto.randomUUID()
+    newNode.layout.x += 20
+    newNode.layout.y += 20
+    addNode(newNode)
+    selectNode(newNode.id)
+  }
+
+  /**
+   * 删除节点
+   * @param node
+   */
+  function removeNode(node: MaterialSchema) {
+    nodes.value = nodes.value.filter((item) => item.id !== node.id)
+    selectedNodeIds.value = selectedNodeIds.value.filter((id) => id !== node.id)
+  }
+
+  /**
+   * 移动节点到最上层
+   * @param node
+   */
+  function moveTop(node: MaterialSchema) {
+    const index = findNodeIndex(node.id)
+    nodes.value.splice(index, 1)
+    nodes.value.unshift(node)
+  }
+
+  function moveBottom(node: MaterialSchema) {
+    const index = findNodeIndex(node.id)
+    nodes.value.splice(index, 1)
+    nodes.value.push(node)
+  }
+
+  /**
+   * 查找节点索引
+   * @param id
+   */
+  function findNodeIndex(id: string) {
+    const index = nodes.value.findIndex((item) => item.id === id)
+    return index
+  }
+
+  /**
+   * 锁定节点
+   * @param node
+   */
+  function toggleLock(node: MaterialSchema) {
+    node.locked = !node.locked
+  }
+
   return {
     panelVisible,
     nodes,
@@ -88,5 +143,10 @@ export const useEditorStore = defineStore('editor', () => {
     deleteNode,
     findNode,
     clearSelected,
+    copyNode,
+    removeNode,
+    moveTop,
+    moveBottom,
+    toggleLock,
   }
 })

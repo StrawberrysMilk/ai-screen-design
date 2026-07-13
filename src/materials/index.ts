@@ -1,16 +1,19 @@
 import type { Component } from 'vue'
 
-import type { MaterialDefinition } from '@/schema/material.ts'
+import type { MaterialDefinition, settersSchema } from '@/schema/material.ts'
 
 const materials: MaterialDefinition[] = []
 
 // text =>> TextMaterial
 // bar =>> ChartsMaterial
 const componentMap = new Map<string, Component>()
+const settersMap = new Map<string, settersSchema[]>()
+
 export function register(material: MaterialDefinition, component?: Component) {
   materials.push(material)
   if (component) {
     componentMap.set(material.schema.type, component)
+    settersMap.set(material.schema.type, material.setters)
   }
 }
 
@@ -43,6 +46,10 @@ export function getMaterialsGroupt() {
 
 export function getMaterialComponent(type: string) {
   return componentMap.get(type)
+}
+
+export function getMaterialSetters(type: string) {
+  return settersMap.get(type)
 }
 
 export function createNode(node) {

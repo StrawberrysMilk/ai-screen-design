@@ -5,9 +5,11 @@ const chartMaterial: MaterialDefinition = {
   name: '柱状图',
   icon: 'fluent-color:list-bar-16',
   group: 'charts',
+  setters: [],
   schema: {
     type: 'charts',
     name: '柱状图',
+    locked: false,
     layout: {
       x: 0,
       y: 0,
