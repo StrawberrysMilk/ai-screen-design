@@ -40,6 +40,8 @@ export function getValue(target, key) {
 export function setValue(target, key, value) {
   const keys = key.split('.')
   const lastKey = keys.pop()
-  const _target = getValue(target, keys.join('.'))
-  _target[lastKey] = value
+  if (keys.length) {
+    target = getValue(target, keys.join('.'))
+  }
+  target[lastKey] = value
 }

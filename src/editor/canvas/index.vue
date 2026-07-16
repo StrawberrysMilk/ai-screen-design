@@ -1,18 +1,15 @@
 <script setup lang="ts">
 import { createNode, getMaterialComponent } from '@/materials'
-import Moveable, {
-  type OnDrag,
-  type OnDragGroup,
-  type OnResize,
-  type OnResizeGroup,
-} from 'vue3-moveable'
+import Moveable, { type OnResize, type OnResizeGroup } from 'vue3-moveable'
 import { storeToRefs } from 'pinia'
 import { useEditorStore } from '@/stores/editor.ts'
 import Selecto from 'vue3-selecto'
 import SketchRuler from 'vue3-sketch-ruler'
 import 'vue3-sketch-ruler/lib/style.css'
-import { debounce } from '@/utils'
 import type { MaterialSchema } from '@/schema/material.ts'
+import { useCanvasRuler } from '@/editor/canvas/composables/useCanvasRuler.ts'
+import { useMoveable } from '@/editor/canvas/composables/useMoveable.ts'
+import { useSelection } from '@/editor/canvas/composables/useSelection.ts'
 
 defineOptions({
   name: 'CanvasRoot',
@@ -20,77 +17,29 @@ defineOptions({
 
 const editorStore = useEditorStore()
 
-const { nodes, selectedNodeIds, canvas } = storeToRefs(editorStore)
+const { nodes } = storeToRefs(editorStore)
 
 const moveableRef = useTemplateRef('moveable')
 const stageRef = useTemplateRef('stage')
 const canvasRootRef = useTemplateRef('canvasRoot')
 
-const selectedTagrt = shallowRef<HTMLElement[]>()
+const {
+  canvasWidth,
+  canvasHeight,
+  canvasStyle,
+  lines,
+  rectWidth,
+  rectHight,
+  scale,
+  palette,
+  onZoomChange,
+} = useCanvasRuler({ canvasRootRef, moveableRef })
 
-const vm = getCurrentInstance()
+const { onDrag, OnResize, onDragGroup, OnResizeGroup, onStart, onEnd } = useMoveable(moveableRef)
 
-const canvasWidth = toRef(canvas.value, 'width')
-const canvasHeight = toRef(canvas.value, 'height')
-
-const canvasStyle = computed(() => {
-  return {
-    width: `${canvasWidth.value}px`,
-    height: `${canvasHeight.value}px`,
-    backgroundColor: canvas.value.backgroundColor,
-  }
-})
-
-const lines = ref({ h: [], v: [] })
-const rectWidth = ref(1000)
-const rectHight = ref(800)
-const scale = ref(1)
-
-const palette = {
-  bgColor: '#1f2937',
-  longfgColor: '#6b7280',
-  fontColor: '#9ca3af',
-  fontShadowColor: 'rgba(14, 141, 167, 0.14)',
-  lineColor: '#22c55e',
-  lineType: 'solid',
-  lockLineColor: '#4b5563',
-  borderColor: '#374151',
-  hoverBg: '#111827',
-  hoverColor: '#ffffff',
-}
-
-watch(
-  selectedNodeIds,
-  (ids) => {
-    selectedTagrt.value = ids.map((id) => {
-      return stageRef.value.querySelector(
-        `[data-node-id='${id}']:not([data-node-locked='true'])`,
-      ) as HTMLElement
-    })
-  },
-  { deep: true, flush: 'post' },
-)
-
-const onRootResize = debounce((rect) => {
-  rectWidth.value = rect.width
-  rectHight.value = rect.height
-}, 300)
-
-onMounted(() => {
-  const { width, height } = canvasRootRef.value.getBoundingClientRect()
-  rectWidth.value = width
-  rectHight.value = height
-
-  const ob = new ResizeObserver((entries) => {
-    const entry = entries[0]
-    const rect = entry.contentRect
-    onRootResize(rect)
-  })
-  ob.observe(canvasRootRef.value)
-
-  onUnmounted(() => {
-    ob.disconnect()
-  })
+const { onSelect, onClearSelected, onSelectEnd, selectedTagrt } = useSelection({
+  moveableRef,
+  stageRef,
 })
 
 /**
@@ -120,69 +69,6 @@ function getNodeStyle(node: MaterialSchema, index: number) {
     height: `${node.layout.height}px`,
     zIndex: index + 1,
   }
-}
-
-function onSelect(node: MaterialSchema, e: MouseEvent) {
-  editorStore.selectNode(node.id)
-
-  nextTick(() => {
-    moveableRef.value.dragStart(e)
-  })
-}
-
-function getNodeByTarget(element: HTMLElement) {
-  const id = element.getAttribute('data-node-id')
-  return editorStore.findNode(id)
-}
-
-function onDrag(e: OnDrag) {
-  e.target.style.left = `${e.left}px`
-  e.target.style.top = `${e.top}px`
-  const node = getNodeByTarget(e.target as HTMLElement)
-  node.layout.x = e.left
-  node.layout.y = e.top
-}
-
-function OnResize(e: OnResize) {
-  e.target.style.width = `${e.width}px`
-  e.target.style.height = `${e.height}px`
-  const node = getNodeByTarget(e.target as HTMLElement)
-  node.layout.width = e.width
-  node.layout.height = e.height
-  onDrag(e.drag)
-}
-
-function onClearSelected() {
-  editorStore.clearSelected()
-}
-
-function onSelectEnd(e) {
-  const ids = e.selected.map((el) => el.getAttribute('data-node-id'))
-  editorStore.selectNodes(ids)
-}
-
-/**
- * 拖动多个元素
- * @param e
- */
-function onDragGroup(e: OnDragGroup) {
-  e.events.forEach(onDrag)
-}
-
-/**
- * 调整多个元素大小
- * @param e
- * @constructor
- */
-function OnResizeGroup(e: OnResizeGroup) {
-  e.events.forEach(OnResize)
-}
-
-/**
- * 缩放改变时，更新moveable的rect
- */
-function onZoomChange() {
-  moveableRef.value.updateRect()
 }
 
 const commandMap = {
@@ -270,9 +156,17 @@ function onCommand(command: string) {
       :resizable="true"
       :origin="false"
       @drag="onDrag"
+      @dragStart="onStart"
+      @dragEnd="onEnd"
       @dragGroup="onDragGroup"
+      @dragGroupStart="onStart"
+      @dragGroupEnd="onEnd"
       @resize="OnResize"
+      @resizeStart="onStart"
+      @resizeEnd="onEnd"
       @resizeGroup="OnResizeGroup"
+      @resizeGroupStart="onStart"
+      @resizeGroupEnd="onEnd"
     />
   </div>
 </template>

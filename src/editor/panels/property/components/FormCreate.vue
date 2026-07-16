@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { getValue, setValue } from '@/utils'
+import { useUndoRedo } from '@/composables/useUndoRedo.ts'
 
 defineOptions({
   name: 'FormCreate',
@@ -7,6 +8,7 @@ defineOptions({
 
 defineProps(['setters', 'formData'])
 
+const { applyChange, startBatch, commitBatch } = useUndoRedo()
 const componentMap = {
   input: ElInput,
   number: (props) => h(ElInputNumber, { precision: 0, ...props }),
@@ -23,7 +25,9 @@ const componentMap = {
           <component
             :is="componentMap[item.type]"
             :modelValue="getValue(formData, item.key)"
-            @update:modelValue="(val) => setValue(formData, item.key, val)"
+            @update:modelValue="(val) => applyChange(formData, item.key, val)"
+            @focus="startBatch"
+            @blur="commitBatch"
           />
         </el-form-item>
       </el-col>

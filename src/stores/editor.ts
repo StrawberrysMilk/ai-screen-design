@@ -2,8 +2,11 @@ import { defineStore } from 'pinia'
 
 import type { MaterialSchema } from '@/schema/material.ts'
 import type { PageSchema } from '@/schema/page.ts'
+import { useUndoRedo } from '@/composables/useUndoRedo.ts'
 
 export const useEditorStore = defineStore('editor', () => {
+  const { redo, undo, applyChange } = useUndoRedo()
+
   const panelVisible = reactive({
     material: true,
     layer: true,
@@ -43,8 +46,12 @@ export const useEditorStore = defineStore('editor', () => {
     return nodes.value.find((node) => node.id === selectedNodeId.value)
   })
 
+  function setNodes(newNodes) {
+    applyChange(nodes, 'value', newNodes)
+  }
+
   function addNode(node: MaterialSchema) {
-    nodes.value.push(node)
+    setNodes([...nodes.value, node])
   }
 
   /**
@@ -92,7 +99,7 @@ export const useEditorStore = defineStore('editor', () => {
    * @param node
    */
   function removeNode(node: MaterialSchema) {
-    nodes.value = nodes.value.filter((item) => item.id !== node.id)
+    setNodes(nodes.value.filter((item) => item.id !== node.id))
     selectedNodeIds.value = selectedNodeIds.value.filter((id) => id !== node.id)
   }
 
@@ -101,15 +108,13 @@ export const useEditorStore = defineStore('editor', () => {
    * @param node
    */
   function moveTop(node: MaterialSchema) {
-    const index = findNodeIndex(node.id)
-    nodes.value.splice(index, 1)
-    nodes.value.unshift(node)
+    const splicedNodes = findNodeIndex(node.id)
+    setNodes([node, ...splicedNodes])
   }
 
   function moveBottom(node: MaterialSchema) {
-    const index = findNodeIndex(node.id)
-    nodes.value.splice(index, 1)
-    nodes.value.push(node)
+    const splicedNodes = findNodeIndex(node.id)
+    setNodes([...splicedNodes, node])
   }
 
   /**
@@ -118,7 +123,8 @@ export const useEditorStore = defineStore('editor', () => {
    */
   function findNodeIndex(id: string) {
     const index = nodes.value.findIndex((item) => item.id === id)
-    return index
+    const splicedNodes = nodes.value.toSpliced(index, 1)
+    return splicedNodes
   }
 
   /**
@@ -127,6 +133,7 @@ export const useEditorStore = defineStore('editor', () => {
    */
   function toggleLock(node: MaterialSchema) {
     node.locked = !node.locked
+    applyChange(node, 'locked', !node.locked)
   }
 
   return {
