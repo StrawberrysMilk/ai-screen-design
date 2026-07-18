@@ -91,7 +91,7 @@ function onCommand(command: string) {
 </script>
 
 <template>
-  <div class="canvas-root" ref="canvasRoot">
+  <div class="canvas-root relative overflow-hidden" ref="canvasRoot">
     <SketchRuler
       v-model:scale="scale"
       :thick="20"
@@ -173,6 +173,8 @@ function onCommand(command: string) {
 
 <style scoped lang="scss">
 .canvas-root {
+  // 创建新的层级上下文
+  isolation: isolate;
   .canvas-stage {
     position: relative;
     .canvas-node {

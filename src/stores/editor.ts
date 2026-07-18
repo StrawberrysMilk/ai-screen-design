@@ -136,6 +136,13 @@ export const useEditorStore = defineStore('editor', () => {
     applyChange(node, 'locked', !node.locked)
   }
 
+  function updateNode(id, newNode: MaterialSchema) {
+    // 使用 map 返回新列表，在列表中替换
+    const newNodes = nodes.value.map((node) => (node.id === id ? newNode : node))
+    // 设置新节点
+    setNodes(newNodes)
+  }
+
   return {
     panelVisible,
     nodes,
@@ -155,5 +162,6 @@ export const useEditorStore = defineStore('editor', () => {
     moveTop,
     moveBottom,
     toggleLock,
+    updateNode,
   }
 })

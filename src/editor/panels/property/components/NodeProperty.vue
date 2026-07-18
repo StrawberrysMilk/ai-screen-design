@@ -3,6 +3,7 @@ import { useEditorStore } from '@/stores/editor.ts'
 import { storeToRefs } from 'pinia'
 import { getMaterialSetters } from '@/materials'
 import FormCreate from '@/editor/panels/property/components/FormCreate.vue'
+import { Icon } from '@iconify/vue'
 
 defineOptions({
   name: 'NodeProperty',
@@ -10,7 +11,9 @@ defineOptions({
 
 const editorStore = useEditorStore()
 const { selectedNode } = storeToRefs(editorStore)
-const setters = getMaterialSetters(selectedNode.value?.type || '')
+const setters = computed(() => {
+  return getMaterialSetters(selectedNode.value?.type || '')
+})
 
 const layoutSetters = [
   {
@@ -40,10 +43,41 @@ const layoutSetters = [
 ]
 
 const active = ref('node')
+
+const visible = ref(false)
+const jsonText = ref<string>('')
+
+function previewJson() {
+  visible.value = true
+  jsonText.value = JSON.stringify(selectedNode.value, null, 2)
+}
+
+function onConfirm() {
+  // 拿到新节点
+  const newNode = JSON.parse(jsonText.value)
+  // 更新节点
+  editorStore.updateNode(selectedNode.value.id, {
+    ...newNode,
+    // id type 不能改，沿用之前的
+    id: selectedNode.value.id,
+    type: selectedNode.value.type,
+  })
+  visible.value = false
+}
 </script>
 
 <template>
   <div class="node-property">
+    <div
+      class="node-title h-40 flex items-center px-20 justify-between font-semibold cursor-pointer"
+    >
+      <span>
+        {{ selectedNode?.name || '未选择组件' }}
+      </span>
+      <span class="cursor-pointer" @click="previewJson">
+        <Icon icon="si:json-duotone" />
+      </span>
+    </div>
     <el-collapse v-model="active" accordion>
       <el-collapse-item :title="'布局属性'" name="layout">
         <form-create :setters="layoutSetters" :form-data="selectedNode" />
@@ -52,11 +86,21 @@ const active = ref('node')
         <form-create :setters="setters" :form-data="selectedNode" />
       </el-collapse-item>
     </el-collapse>
+    <el-drawer :destroy-on-close="true" v-model="visible" title="编辑 JSON" size="800">
+      <MonacoEditor v-model="jsonText" />
+      <template #footer>
+        <el-button @click="visible = false">取消</el-button>
+        <el-button type="primary" @click="onConfirm">确认</el-button>
+      </template>
+    </el-drawer>
   </div>
 </template>
 
 <style scoped lang="scss">
 .node-property {
+  .node-title {
+    background: bg-mix(60);
+  }
   :deep(.el-collapse) {
     --el-collapse-border-color: var(--border-color);
     --el-collapse-header-height: 48px;
