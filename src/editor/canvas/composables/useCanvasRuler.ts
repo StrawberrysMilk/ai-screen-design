@@ -5,8 +5,8 @@ import { useEditorStore } from '@/stores/editor.ts'
 export function useCanvasRuler({ moveableRef, canvasRootRef }) {
   const editorStore = useEditorStore()
   const { canvas } = storeToRefs(editorStore)
-  const canvasWidth = toRef(canvas.value, 'width')
-  const canvasHeight = toRef(canvas.value, 'height')
+  const canvasWidth = computed(() => canvas.value.width)
+  const canvasHeight = computed(() => canvas.value.height)
 
   const canvasStyle = computed(() => {
     return {

@@ -26,7 +26,7 @@ const componentMap = {
           <component
             :is="componentMap[item.type]"
             :modelValue="getValue(formData, item.key)"
-            v-bing="item.props"
+            v-bind="item.props"
             @update:modelValue="(val) => applyChange(formData, item.key, val)"
             @focus="startBatch"
             @blur="commitBatch"

@@ -29,6 +29,11 @@ export const useEditorStore = defineStore('editor', () => {
    */
   const nodes = toRef(page.value, 'nodes')
 
+  function setPage(newPage: PageSchema) {
+    // 合并
+    Object.assign(page.value, newPage)
+  }
+
   const selectedNodeIds = ref([])
 
   /**
@@ -163,5 +168,6 @@ export const useEditorStore = defineStore('editor', () => {
     moveBottom,
     toggleLock,
     updateNode,
+    setPage,
   }
 })
