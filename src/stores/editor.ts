@@ -20,6 +20,28 @@ export const useEditorStore = defineStore('editor', () => {
       backgroundColor: '#0d121b',
     },
     nodes: [],
+    dataSources: [
+      {
+        type: 'static',
+        name: '静态数据源',
+        id: '123',
+        data: [
+          { label: '一月', value: 100 },
+          { label: '二月', value: 200 },
+          { label: '三月', value: 300 },
+        ],
+      },
+      {
+        type: 'static',
+        name: '访问数据',
+        id: '456',
+        data: [
+          { label: '一月', value: 1000 },
+          { label: '二月', value: 200 },
+          { label: '三月', value: 30 },
+        ],
+      },
+    ],
   })
 
   const canvas = toRef(page.value, 'canvas')
@@ -28,6 +50,11 @@ export const useEditorStore = defineStore('editor', () => {
    * 当前编辑器中组件的列表
    */
   const nodes = toRef(page.value, 'nodes')
+
+  /**
+   * 当前编辑器中数据源的列表
+   */
+  const dataSources = toRef(page.value, 'dataSources')
 
   function setPage(newPage: PageSchema) {
     // 合并
@@ -153,6 +180,7 @@ export const useEditorStore = defineStore('editor', () => {
     nodes,
     page,
     canvas,
+    dataSources,
     selectedNodeId,
     selectedNodeIds,
     selectedNode,

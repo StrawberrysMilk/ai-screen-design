@@ -77,7 +77,7 @@ async function onFileChange(e: Event) {
     editorStore.setPage(newPage)
     ElMessage.success('导入成功')
   } catch {
-    console.error('请检查JSON是否合法')
+    console.error('请检查JSON是 否合法')
   }
 
   // 方法二
