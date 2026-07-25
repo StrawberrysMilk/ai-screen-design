@@ -32,7 +32,8 @@ const option = computed(() => {
     dataset: {
       ..._option.dataset,
       // 重写 source，如果数据源中存在这份数据，就使用，否则使用自带的
-      source: data.value.length ? data.value : _option.dataset.source,
+      source: data.value || _option.dataset.source,
+      // source: data.value.length ? data.value : _option.dataset.source,
     },
   }
 })

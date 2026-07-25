@@ -16,8 +16,11 @@
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.3.2",
+    "@types/mockjs": "^1.0.10",
+    "axios": "^1.18.1",
     "echarts": "^6.1.0",
     "element-plus": "^2.14.2",
+    "mockjs": "^1.1.0",
     "monaco-editor": "^0.55.1",
     "pinia": "^3.0.4",
     "tailwindcss": "^4.3.2",
