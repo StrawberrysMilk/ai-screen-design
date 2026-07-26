@@ -3,16 +3,20 @@ import { Icon } from '@iconify/vue'
 import { useEditorStore } from '@/stores/editor.ts'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
+import DataSourceManager from '@/editor/toolbar/components/DataSourceManager.vue'
 defineOptions({
   name: 'ToolbarRight',
 })
 const editorStore = useEditorStore()
-const { page, selectedNode, setPage } = storeToRefs(editorStore)
-
+const { page } = storeToRefs(editorStore)
+// 全局 json 编辑抽屉
 const visible = ref(false)
+// 全局数据源弹框
+const dataSourceVisible = ref(false)
 const jsonText = ref<string>('')
 
 const inputRef = useTemplateRef('inputRef')
+const dataSourceManagerRef = useTemplateRef('dataSourceManagerRef')
 
 function previewJson() {
   visible.value = true
@@ -89,6 +93,17 @@ async function onFileChange(e: Event) {
   // }
   // reader.readAsText(file)
 }
+
+function openDataSource() {
+  dataSourceVisible.value = true
+}
+
+function onSave() {
+  // 调用 DataSourceManager 的保存方法
+  dataSourceManagerRef.value.save()
+  dataSourceVisible.value = false
+  ElMessage.success('保存成功')
+}
 </script>
 
 <template>
@@ -102,6 +117,9 @@ async function onFileChange(e: Event) {
     <span>
       <Icon icon="entypo:publish" />
     </span>
+    <span @click="openDataSource">
+      <Icon icon="mdi:database" />
+    </span>
     <span @click="onImport">
       <Icon icon="mdi:import" />
     </span>
@@ -109,13 +127,21 @@ async function onFileChange(e: Event) {
       <Icon icon="mdi:export" />
     </span>
     <input ref="inputRef" type="file" v-show="false" @change="onFileChange" />
-    <el-drawer title="编辑 JSON" size="800" v-model="visible">
+    <el-drawer destroy-on-close title="编辑 JSON" size="800" v-model="visible">
       <MonacoEditor v-model="jsonText" />
       <template #footer>
         <el-button @click="visible = false">取消</el-button>
         <el-button type="primary" @click="onConfirm">确认</el-button>
       </template>
     </el-drawer>
+    <el-dialog destroy-on-close title="数据源配置" v-model="dataSourceVisible" width="800">
+      <!--      数据源管理      -->
+      <DataSourceManager ref="dataSourceManagerRef" />
+      <template #footer>
+        <el-button @click="dataSourceVisible = false">关闭</el-button>
+        <el-button type="primary" @click="onSave">确认</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 

@@ -24,8 +24,9 @@ const modelValue = defineModel<string>()
 // useTemplateRef 同样可以
 const editorElement = ref()
 
+let instance: editor.IStandaloneCodeEditor
 onMounted(() => {
-  const instance = editor.create(editorElement.value, {
+  instance = editor.create(editorElement.value, {
     value: modelValue.value,
     theme: 'vs-dark',
     language: props.lang || 'json',
@@ -41,6 +42,11 @@ onMounted(() => {
   onBeforeUnmount(() => {
     instance.dispose()
   })
+})
+watch(modelValue, (newVal) => {
+  if (instance.getValue() !== newVal) {
+    instance.setValue(newVal)
+  }
 })
 </script>
 

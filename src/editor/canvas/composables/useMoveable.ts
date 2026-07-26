@@ -36,6 +36,10 @@ export function useMoveable(moveableRef) {
     commitBatch()
   }
 
+  /**
+   * 拖动单个元素
+   * @param e
+   */
   function onDrag(e: OnDrag) {
     e.target.style.left = `${e.left}px`
     e.target.style.top = `${e.top}px`

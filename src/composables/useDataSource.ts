@@ -1,5 +1,6 @@
 import type { DataSourceSchema } from '@/schema/page.ts'
 import axios from 'axios'
+import { getValue } from '@/utils'
 
 export function useDataSource(dataId: Ref<string>) {
   const dataSources = inject<Ref<DataSourceSchema[]>>('dataSources')
@@ -24,18 +25,8 @@ export function useDataSource(dataId: Ref<string>) {
     if (source.value.type === 'api') {
       const url = source.value.url
       try {
-        // 获取当前页面的查询参数
-        const search = new URLSearchParams(location.search)
-        // 将查询参数转换为对象
-        const params = Object.fromEntries(search.entries())
-        const res = await axios.get(url, {
-          params: {
-            ...source.value.params,
-            // 合并当前页面的查询参数
-            ...params,
-          },
-        })
-        data.value = res?.data || []
+        const res = await fetchData(source.value)
+        data.value = res || []
       } finally {
         if (source.value?.interval) {
           timer = setTimeout(() => loadData(), source.value?.interval)
@@ -55,5 +46,33 @@ export function useDataSource(dataId: Ref<string>) {
 
   return {
     data,
+  }
+}
+
+export async function fetchData(source: DataSourceSchema) {
+  if (source.type === 'api') {
+    const url = source.url
+    // 获取当前页面的查询参数
+    const search = new URLSearchParams(location.search)
+    // 将查询参数转换为对象
+    const params = Object.fromEntries(search.entries())
+    const queryParams = {
+      ...source.params,
+      // 合并当前页面的查询参数
+      ...params,
+    }
+    const paramsKey = source.method === 'GET' ? 'params' : 'data'
+    const res = await axios.request({
+      url: source.url,
+      method: source.method,
+      [paramsKey]: queryParams,
+    })
+    // data = { list: [] }
+    // source.responsePath = 'list'
+    // if (source.responsePath) {
+    // }
+    return getValue(res.data, source?.responsePath)
+  } else {
+    return Promise.resolve(source.data || [])
   }
 }

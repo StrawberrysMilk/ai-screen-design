@@ -1,4 +1,5 @@
 import type { MaterialSchema } from '@/schema/material.ts'
+import type { HttpMethod } from '@/composables/enum.ts'
 
 export interface DataSourceSchema {
   /**
@@ -17,6 +18,19 @@ export interface DataSourceSchema {
    * 接口请求的url地址
    */
   url?: string
+  /**
+   * 接口请求的方式
+   */
+  method?: HttpMethod
+  /**
+   * 接口请求返回数据的路径，支持点语法
+   * data = { list: [] }
+   *  responsePath = 'list'
+   * data = { data: { list: [] } }
+   *  responsePath = 'data.list'
+   *  结果为 []
+   */
+  responsePath?: string
   /**
    * 数据源的轮询间隔，单位为毫秒
    */

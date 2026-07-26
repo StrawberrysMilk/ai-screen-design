@@ -14,6 +14,7 @@ export function debounce(fn, ms) {
  * @param key
  */
 export function getValue(target, key) {
+  if (!key) return target
   const keys = key.split('.')
   while (keys.length) {
     const key = keys.shift()
@@ -44,4 +45,9 @@ export function setValue(target, key, value) {
     target = getValue(target, keys.join('.'))
   }
   target[lastKey] = value
+}
+
+export function deepClone<T>(value: T): T {
+  if (typeof value !== 'object' || value === null) return value
+  return JSON.parse(JSON.stringify(value))
 }
