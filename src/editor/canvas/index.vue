@@ -50,8 +50,10 @@ function onDrop(e: DragEvent) {
   const data = e.dataTransfer.getData('schema')
   const node = createNode(JSON.parse(data))
   const stageRect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-  node.layout.x = e.clientX - stageRect.left - node.layout.width / 2
-  node.layout.y = e.clientY - stageRect.top - node.layout.height / 2
+  // node.layout.x = e.clientX - stageRect.left - node.layout.width / 2
+  // node.layout.y = e.clientY - stageRect.top - node.layout.height / 2
+  node.layout.x = (e.clientX - stageRect.left) / scale.value - node.layout.width / 2
+  node.layout.y = (e.clientY - stageRect.top) / scale.value - node.layout.height / 2
   editorStore.addNode(node)
   editorStore.selectNode(node.id)
 }

@@ -4,9 +4,13 @@ import { useEditorStore } from '@/stores/editor.ts'
 import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import DataSourceManager from '@/editor/toolbar/components/DataSourceManager.vue'
+import { useRouter } from 'vue-router'
 defineOptions({
   name: 'ToolbarRight',
 })
+
+const router = useRouter()
+
 const editorStore = useEditorStore()
 const { page } = storeToRefs(editorStore)
 // 全局 json 编辑抽屉
@@ -18,6 +22,9 @@ const jsonText = ref<string>('')
 const inputRef = useTemplateRef('inputRef')
 const dataSourceManagerRef = useTemplateRef('dataSourceManagerRef')
 
+/**
+ * 预览 JSON
+ */
 function previewJson() {
   visible.value = true
   jsonText.value = JSON.stringify(page.value, null, 2)
@@ -52,6 +59,9 @@ function onExport() {
   URL.revokeObjectURL(url)
 }
 
+/**
+ * 导入 JSON
+ */
 function onImport() {
   inputRef.value.click()
   // const input = document.createElement('input')
@@ -94,21 +104,31 @@ async function onFileChange(e: Event) {
   // reader.readAsText(file)
 }
 
+/**
+ * 打开数据源配置弹框
+ */
 function openDataSource() {
   dataSourceVisible.value = true
 }
 
+/**
+ * 保存数据源配置
+ */
 function onSave() {
   // 调用 DataSourceManager 的保存方法
   dataSourceManagerRef.value.save()
   dataSourceVisible.value = false
   ElMessage.success('保存成功')
 }
+
+function onPreview() {
+  router.push('/preview')
+}
 </script>
 
 <template>
   <div class="flex gap-20 toolbar-right justify-end">
-    <span>
+    <span @click="onPreview">
       <Icon icon="fluent:preview-link-16-filled" />
     </span>
     <span @click="previewJson">
