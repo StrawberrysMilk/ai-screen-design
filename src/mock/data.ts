@@ -1,6 +1,11 @@
 import Mock from 'mockjs'
 
+Mock.setup({
+  timeout: 3000, // 设置延迟响应时间，模拟网络延迟,
+})
+
 Mock.mock(/\/api\/data/, 'get', (options) => {
+  console.log('options ===>', options)
   // 创建 URL 对象，解析查询参数
   const url = new URL(options.url, location.origin)
   // 创建 URL 参数对象

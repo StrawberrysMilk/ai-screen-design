@@ -23,7 +23,7 @@ let chart: EChartsType
 
 const dataId = computed(() => props.schema.dataId)
 
-const { data } = useDataSource(dataId)
+const { data, loading, error, refresh } = useDataSource(dataId)
 
 const option = computed(() => {
   const _option = props.schema.props.option
@@ -64,7 +64,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="chart-material w-full h-full" ref="chartRef"></div>
+  <div v-loading="loading" class="chart-material w-full h-full" ref="chartRef"></div>
 </template>
 
 <style scoped lang="scss"></style>

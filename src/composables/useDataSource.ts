@@ -4,7 +4,8 @@ import { getValue } from '@/utils'
 
 export function useDataSource(dataId: Ref<string>) {
   const dataSources = inject<Ref<DataSourceSchema[]>>('dataSources')
-
+  const loading = ref<boolean>(false)
+  const error = ref<string | null>(null)
   let timer: any = null
 
   /**
@@ -20,14 +21,20 @@ export function useDataSource(dataId: Ref<string>) {
 
   const data = ref()
 
-  async function loadData() {
+  async function loadData(params?: Record<string, any>) {
+    // 清除定时器，避免重复请求
+    clearTimeout(timer)
     if (!source.value) return
     if (source.value.type === 'api') {
       const url = source.value.url
       try {
-        const res = await fetchData(source.value)
+        loading.value = true
+        const res = await fetchData(source.value, params)
         data.value = res || []
+      } catch (e) {
+        error.value = e
       } finally {
+        loading.value = false
         if (source.value?.interval) {
           timer = setTimeout(() => loadData(), source.value?.interval)
         }
@@ -42,14 +49,32 @@ export function useDataSource(dataId: Ref<string>) {
     clearTimeout(timer)
   })
 
-  watch(source, loadData, { immediate: true })
+  watch(
+    source,
+    () => {
+      loadData()
+    },
+    { immediate: true },
+  )
 
   return {
     data,
+    loading,
+    error,
+    refresh: loadData,
   }
 }
 
-export async function fetchData(source: DataSourceSchema) {
+/**
+ * 相同的 url、params、method 做请求复用
+ * {
+ *   '/api/data?a=1'：Promise
+ * }
+ * @param source
+ * @param data
+ */
+const requestMap = {}
+export async function fetchData(source: DataSourceSchema, data?: Record<string, any>) {
   if (source.type === 'api') {
     const url = source.url
     // 获取当前页面的查询参数
@@ -60,18 +85,37 @@ export async function fetchData(source: DataSourceSchema) {
       ...source.params,
       // 合并当前页面的查询参数
       ...params,
+      ...data,
     }
     const paramsKey = source.method === 'GET' ? 'params' : 'data'
-    const res = await axios.request({
+    const config = {
       url: source.url,
       method: source.method,
       [paramsKey]: queryParams,
-    })
+    }
+
+    const key = JSON.stringify(config)
+    // 有缓存，直接缓存，不请求了
+    if (requestMap[key]) return requestMap[key]
+
+    /**
+     * 没请求过，直接发送
+     */
+    const promise = await axios
+      .request(config)
+      .then((res) => {
+        return getValue(res.data, source?.responsePath)
+      })
+      .finally(() => {
+        // 回来了就删掉
+        delete requestMap[key]
+      })
     // data = { list: [] }
     // source.responsePath = 'list'
     // if (source.responsePath) {
     // }
-    return getValue(res.data, source?.responsePath)
+    requestMap[key] = promise
+    return promise
   } else {
     return Promise.resolve(source.data || [])
   }
