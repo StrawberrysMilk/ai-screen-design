@@ -2,16 +2,25 @@
 import type { MaterialSchema } from '@/schema/material.ts'
 import { getMaterialComponent } from '@/materials'
 import type { PageSchema } from '@/schema/page.ts'
+import { createRuntimeContext } from '@/runtime/context.ts'
 
 defineOptions({
   name: 'ScreenRenderer',
 })
 const props = defineProps<{ page: PageSchema }>()
-const nodes = computed(() => props.page.nodes || [])
+
+const runtimePage = ref(props.page)
+
+const context = createRuntimeContext(runtimePage)
+// @ts-expect-error 忽略，先挂着window 测试使用
+window.$context = context
+console.log(context, 'context')
+
+const nodes = computed(() => runtimePage.value.nodes || [])
 const canvas = computed(
-  () => props.page.canvas || { width: 1920, height: 1080, backgroundColor: '#fff' },
+  () => runtimePage.value.canvas || { width: 1920, height: 1080, backgroundColor: '#fff' },
 )
-const dataSources = computed(() => props.page.dataSources || [])
+const dataSources = computed(() => runtimePage.value.dataSources || [])
 
 const scale = ref(1)
 const left = ref(0)
@@ -49,7 +58,16 @@ function init() {
   top.value = (window.innerHeight - canvas.value.height * scale.value) / 2
 }
 
+const vm = getCurrentInstance()
+function registerNodeInstance() {
+  const refs = {}
+  for (const key in vm.refs) {
+    refs[key] = vm.refs[key][0]
+  }
+  context.registerNodeInstance(refs)
+}
 onMounted(() => {
+  registerNodeInstance()
   init()
   addEventListener('resize', init)
 
@@ -68,7 +86,7 @@ onMounted(() => {
         :key="node.id"
         :style="getNodeStyle(node, index)"
       >
-        <component :is="getMaterialComponent(node.type)" :schema="node" />
+        <component :ref="node.id" :is="getMaterialComponent(node.type)" :schema="node" />
       </div>
     </div>
   </div>

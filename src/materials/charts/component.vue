@@ -61,6 +61,9 @@ onMounted(() => {
     chart.dispose()
   })
 })
+defineExpose({
+  refresh,
+})
 </script>
 
 <template>

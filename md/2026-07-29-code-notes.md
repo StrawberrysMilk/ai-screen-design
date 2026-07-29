@@ -607,4 +607,665 @@ URL 中的 `id` 可能缺失、重复或被用户修改。读取前必须验证�
 
 本节的核心不是简单地把 JSON 放进 `localStorage`，而是建立“页面 ID、发布快照、独立路由、重新读取、统一渲染器”之间的完整关系。
 
-<!-- 后续内容继续使用同级标题：## 32「...」、## 33「...」 -->
+## 32「运行时上下文」
+
+### 32.1 本节目标
+
+第 31 节解决了页面发布和独立访问，第 32 节继续解决“大屏运行后如何被外部代码控制”的问题。
+
+本次涉及 5 个文件，共新增约 168 行、删除约 6 行，主要完成以下工作：
+
+1. 新建运行时上下文 `RuntimeContext`。
+2. 支持按 ID 获取节点并修改节点属性。
+3. 支持通过组件实例调用物料暴露的方法。
+4. 支持刷新使用同一个数据源的多个节点。
+5. 在 `ScreenRenderer` 中创建上下文并注册物料实例。
+6. 图表物料向运行时暴露 `refresh()`。
+7. 文本物料增加字号配置，并将数值转换为 CSS 单位。
+
+### 32.2 5 个文件的职责
+
+| 文件 | 本次职责 |
+| --- | --- |
+| `src/runtime/context.ts` | 定义并创建运行时上下文，统一管理节点和组件实例 |
+| `src/components/ScreenRenderer/index.vue` | 创建上下文、保存运行时页面并注册物料实例 |
+| `src/materials/charts/component.vue` | 向外暴露图表数据刷新方法 |
+| `src/materials/text/index.ts` | 增加文本字号配置项和默认值 |
+| `src/materials/text/component.vue` | 将 Schema 样式转换为可直接渲染的 CSS 样式 |
+
+### 32.3 什么是运行时上下文
+
+页面 Schema 只描述“页面中有什么”，例如节点、布局、属性和数据源。页面运行后，还需要一套统一 API 来操作这些内容：
+
+```text
+获取某个节点
+修改文本内容
+修改节点样式
+调用图表刷新方法
+刷新使用同一数据源的多个图表
+```
+
+如果外部代码直接访问 Vue 组件、Pinia 或 DOM，会与内部实现产生强耦合。运行时上下文位于外部脚本和页面内部之间，相当于一层统一控制接口。
+
+```mermaid
+flowchart LR
+  A[外部脚本或事件] --> B[RuntimeContext]
+  B --> C[PageSchema 节点数据]
+  B --> D[物料组件实例 Map]
+  C --> E[响应式更新页面]
+  D --> F[调用组件公开方法]
+```
+
+外部代码只需要知道节点 ID、属性路径和公开方法名，不需要了解节点具体由哪个 Vue 组件实现。
+
+### 32.4 运行时上下文的能力清单
+
+`src/runtime/context.ts` 中定义的上下文包含 7 个方法：
+
+| 方法 | 作用 |
+| --- | --- |
+| `getNode(id)` | 根据节点 ID 获取 `MaterialSchema` |
+| `setAttribute(id, key, value)` | 根据完整路径修改节点属性 |
+| `setProp(id, key, value)` | 修改节点 `props` 中的字段 |
+| `setStyle(id, key, value)` | 修改节点 `style` 中的字段 |
+| `registerNodeInstance(instances)` | 注册节点 ID 与组件实例的对应关系 |
+| `trigger(id, name, ...args)` | 调用指定节点组件公开的方法 |
+| `refreshNodesByDataId(dataId, ...args)` | 刷新所有使用指定数据源的节点 |
+
+这些方法可以分为两类：
+
+```text
+Schema 操作
+  -> getNode
+  -> setAttribute
+  -> setProp
+  -> setStyle
+
+组件实例操作
+  -> registerNodeInstance
+  -> trigger
+  -> refreshNodesByDataId
+```
+
+Schema 操作负责修改声明式数据，组件实例操作负责执行“刷新”这类命令式行为。
+
+### 32.5 `createRuntimeContext()` 的输入与内部状态
+
+上下文工厂接收一份响应式页面：
+
+```ts
+export function createRuntimeContext(
+  page: Ref<PageSchema>,
+): runtimeContext
+```
+
+传入 `Ref<PageSchema>` 而不是普通对象，使上下文每次执行方法时都能读取当前的 `page.value`。
+
+函数内部维护组件实例 Map：
+
+```ts
+let instanceMap = {}
+```
+
+它的结构可以理解为：
+
+```ts
+{
+  'text-node-id': TextMaterial组件实例,
+  'chart-node-id': ChartMaterial组件实例,
+}
+```
+
+页面节点和组件实例使用相同 ID 建立联系：
+
+```text
+MaterialSchema.id
+  = 模板 ref 名称
+  = instanceMap 的 key
+```
+
+因此上下文可以先通过 ID 找到节点数据，也可以通过同一个 ID 找到节点对应的 Vue 组件实例。
+
+### 32.6 `getNode()`：按 ID 查找节点
+
+```ts
+const getNode = (id: string) => {
+  return page.value?.nodes?.find((node) => node.id === id)
+}
+```
+
+示例：
+
+```ts
+const node = context.getNode('node-123')
+```
+
+找到时返回 `MaterialSchema`，找不到时返回 `undefined`。
+
+这让其他上下文方法不需要重复编写节点查找逻辑，`setAttribute()`、`setProp()` 和 `setStyle()` 都建立在它之上。
+
+### 32.7 `setAttribute()`：按路径修改节点
+
+```ts
+const setAttribute = (id, key, value) => {
+  const node = getNode(id)
+  if (!node) {
+    console.warn(`没有找到${id}对应的节点`)
+    return
+  }
+  setValue(node, key, value)
+}
+```
+
+`key` 是支持点语法的完整属性路径，例如：
+
+```ts
+context.setAttribute(
+  'node-123',
+  'props.content',
+  '运行时修改后的文本',
+)
+
+context.setAttribute(
+  'node-123',
+  'layout.width',
+  500,
+)
+```
+
+底层调用 `src/utils/index.ts` 中的 `setValue()`。它先找到目标路径的父对象，再修改最后一个字段。
+
+```text
+props.content
+  -> 找到 node.props
+  -> 写入 content
+
+layout.width
+  -> 找到 node.layout
+  -> 写入 width
+```
+
+由于节点位于 Vue 的响应式页面对象中，修改成功后，依赖该字段的组件会自动重新渲染。
+
+### 32.8 `setProp()` 和 `setStyle()`：快捷方法
+
+`setProp()` 自动补充 `props.` 前缀：
+
+```ts
+const setProp = (id, key, value) => {
+  setAttribute(id, `props.${key}`, value)
+}
+```
+
+调用示例：
+
+```ts
+context.setProp(
+  'text-node-id',
+  'content',
+  '新的文本内容',
+)
+```
+
+等价于：
+
+```ts
+context.setAttribute(
+  'text-node-id',
+  'props.content',
+  '新的文本内容',
+)
+```
+
+`setStyle()` 自动补充 `style.` 前缀：
+
+```ts
+const setStyle = (id, key, value) => {
+  setAttribute(id, `style.${key}`, value)
+}
+```
+
+调用示例：
+
+```ts
+context.setStyle('text-node-id', 'color', '#ff4d4f')
+context.setStyle('text-node-id', 'fontSize', 24)
+```
+
+这两个方法减少了外部脚本重复拼接完整路径的工作，并让调用意图更清晰。
+
+### 32.9 `registerNodeInstance()`：注册组件实例
+
+Schema 只能描述数据，无法直接执行组件内部函数。要调用图表的 `refresh()`，上下文还需要取得实际组件实例。
+
+```ts
+const registerNodeInstance = (instances) => {
+  instanceMap = instances
+}
+```
+
+`ScreenRenderer` 在节点模板上添加动态 ref：
+
+```vue
+<component
+  :ref="node.id"
+  :is="getMaterialComponent(node.type)"
+  :schema="node"
+/>
+```
+
+组件挂载后，再将 ref 整理为：
+
+```ts
+{
+  [nodeId]: componentInstance,
+}
+```
+
+并调用：
+
+```ts
+context.registerNodeInstance(refs)
+```
+
+这样运行时上下文就同时掌握节点数据和节点组件实例。
+
+### 32.10 `trigger()`：调用物料公开方法
+
+```ts
+const trigger = (id, name, ...args) => {
+  const instance = instanceMap[id]
+
+  if (!instance) {
+    console.warn(`没有找到${id}对应的组件实例`)
+    return
+  }
+
+  if (typeof instance[name] !== 'function') {
+    console.warn(`组件实例${id}没有${name}方法`)
+    return
+  }
+
+  return instance[name](...args)
+}
+```
+
+执行过程：
+
+```text
+传入节点 ID 和方法名
+  -> 从 instanceMap 找组件实例
+  -> 检查实例是否存在
+  -> 检查公开方法是否存在
+  -> 透传参数并执行
+  -> 返回组件方法的返回值
+```
+
+调用示例：
+
+```ts
+context.trigger('chart-node-id', 'refresh')
+
+context.trigger(
+  'chart-node-id',
+  'refresh',
+  { date: '2026-07-29' },
+)
+```
+
+`...args` 让上下文不需要知道每种物料方法的具体参数结构，只负责转发。
+
+### 32.11 图表物料为什么需要 `defineExpose()`
+
+文件：`src/materials/charts/component.vue`
+
+图表内部已经从 `useDataSource()` 得到 `refresh`：
+
+```ts
+const { data, loading, error, refresh } =
+  useDataSource(dataId)
+```
+
+本次新增：
+
+```ts
+defineExpose({
+  refresh,
+})
+```
+
+`<script setup>` 中的变量默认不会全部暴露给父组件。只有通过 `defineExpose()` 明确公开的方法，才能从组件模板 ref 对应的实例上调用。
+
+```mermaid
+flowchart LR
+  A[RuntimeContext.trigger] --> B[图表组件实例]
+  B --> C[defineExpose 的 refresh]
+  C --> D[useDataSource.loadData]
+  D --> E[重新请求 API]
+  E --> F[更新 ECharts 数据]
+```
+
+这是一种受控的命令式组件 API：图表只公开允许外部调用的能力，其他内部实现仍然保持封装。
+
+### 32.12 `refreshNodesByDataId()`：批量刷新关联节点
+
+多个图表可能绑定同一个数据源。运行时上下文可以按 `dataId` 找到这些节点：
+
+```ts
+const nodes = page.value.nodes.filter(
+  (node) => node.dataId === dataId,
+)
+```
+
+随后逐个触发 `refresh`：
+
+```ts
+nodes.forEach((node) => {
+  trigger(node.id, 'refresh', ...args)
+})
+```
+
+调用示例：
+
+```ts
+context.refreshNodesByDataId(
+  'sales-data-source',
+  { year: 2026 },
+)
+```
+
+完整流程：
+
+```text
+根据 dataId 查找所有节点
+  -> 得到绑定该数据源的图表节点
+  -> 根据节点 ID 找组件实例
+  -> 调用每个实例公开的 refresh
+  -> 将动态参数传给 useDataSource
+  -> 所有相关图表重新请求数据
+```
+
+这为大屏联动提供了基础。例如点击某个区域后，可以让多个图表使用同一组筛选参数刷新。
+
+### 32.13 `ScreenRenderer`：创建运行时环境
+
+文件：`src/components/ScreenRenderer/index.vue`
+
+#### 32.13.1 创建运行时页面
+
+```ts
+const runtimePage = ref(props.page)
+```
+
+后续节点、画布和数据源都改为从 `runtimePage` 派生：
+
+```ts
+const nodes = computed(
+  () => runtimePage.value.nodes || [],
+)
+
+const canvas = computed(
+  () => runtimePage.value.canvas || defaultCanvas,
+)
+
+const dataSources = computed(
+  () => runtimePage.value.dataSources || [],
+)
+```
+
+上下文和渲染器读取同一份 `runtimePage`，因此上下文修改节点后，页面渲染可以立即响应。
+
+当前 `ref(props.page)` 只增加了一层响应式引用，没有深拷贝页面对象。运行时修改仍会作用到父组件传入的同一个页面对象。
+
+#### 32.13.2 创建上下文
+
+```ts
+const context = createRuntimeContext(runtimePage)
+```
+
+上下文的生命周期跟随 `ScreenRenderer`。每个渲染器实例都有自己的页面引用和组件实例 Map，彼此不会共用内部 `instanceMap`。
+
+#### 32.13.3 暂时挂载到 `window`
+
+```ts
+// @ts-expect-error 忽略，先挂着window 测试使用
+window.$context = context
+```
+
+这样可以在浏览器控制台直接测试：
+
+```ts
+$context.getNode('node-id')
+
+$context.setProp(
+  'text-node-id',
+  'content',
+  '控制台修改文本',
+)
+
+$context.setStyle(
+  'text-node-id',
+  'fontSize',
+  32,
+)
+
+$context.trigger(
+  'chart-node-id',
+  'refresh',
+  { region: 'north' },
+)
+```
+
+挂载到 `window` 目前属于开发调试入口，并不是正式的模块通信方式。
+
+### 32.14 文本物料增加字号配置
+
+文件：`src/materials/text/index.ts`
+
+属性面板增加字号 Setter：
+
+```ts
+{
+  type: 'number',
+  label: '字号',
+  key: 'style.fontSize',
+}
+```
+
+默认 Schema 增加：
+
+```ts
+style: {
+  color: 'white',
+  fontSize: 16,
+}
+```
+
+属性面板和运行时上下文现在都可以修改同一个路径：
+
+```text
+style.fontSize
+```
+
+编辑态通过表单 Setter 修改，运行态通过 `context.setStyle()` 修改，最终都落到统一的节点 Schema。
+
+### 32.15 文本组件的样式转换
+
+文件：`src/materials/text/component.vue`
+
+组件新增纯计算属性：
+
+```ts
+const textStyle = computed(() => {
+  const style = props.schema.style || {}
+  return {
+    ...style,
+    fontSize: style.fontSize
+      ? `${style.fontSize}px`
+      : '14px',
+  }
+})
+```
+
+Schema 中的字号保存为数字：
+
+```ts
+fontSize: 16
+```
+
+浏览器渲染时转换为：
+
+```css
+font-size: 16px;
+```
+
+这里使用 `computed` 而不是直接修改 prop，符合单向数据流：
+
+```text
+schema.style 是输入
+  -> textStyle 负责派生 CSS 样式
+  -> 模板只绑定计算结果
+```
+
+当运行时执行：
+
+```ts
+context.setStyle('text-id', 'fontSize', 30)
+```
+
+响应链路如下：
+
+```text
+node.style.fontSize 更新
+  -> textStyle 重新计算
+  -> 得到 30px
+  -> Vue 更新文本 DOM
+```
+
+### 32.16 三条典型运行时链路
+
+#### 动态修改文本
+
+```text
+外部脚本调用 setProp
+  -> getNode 根据 ID 查找文本节点
+  -> setValue 修改 props.content
+  -> TextMaterial 接收到响应式 Schema 变化
+  -> 模板文本自动更新
+```
+
+#### 动态修改样式
+
+```text
+外部脚本调用 setStyle
+  -> setAttribute 拼接 style 路径
+  -> setValue 修改 style.fontSize
+  -> textStyle 重新计算
+  -> 数字转换为 px
+  -> 文本样式更新
+```
+
+#### 动态刷新图表
+
+```text
+外部脚本调用 trigger 或 refreshNodesByDataId
+  -> instanceMap 找到 ChartMaterial 实例
+  -> 调用 defineExpose 暴露的 refresh
+  -> useDataSource 重新加载数据
+  -> data 更新
+  -> option 计算属性重新计算
+  -> chart.setOption 更新图表
+```
+
+### 32.17 当前实现的类型检查结果
+
+执行：
+
+```bash
+pnpm type-check
+```
+
+检查仍未通过，共有 3 个错误，全部来自已有的：
+
+```text
+src/editor/toolbar/components/DataSourceManager.vue
+```
+
+错误原因仍是表单编辑阶段使用 JSON 字符串，而 `DataSourceSchema` 中的 `data` 和 `params` 定义为对象，两个阶段共用同一个类型导致不匹配。
+
+第 32 节新增的 5 个文件没有产生新的 TypeScript 检查错误。不过当前上下文大量使用 `any`，所以部分潜在调用错误不会被 TypeScript 提前发现。
+
+### 32.18 当前实现的注意事项
+
+1. `runtimeContext` 是接口类型，建议按 TypeScript 命名规范改为 `RuntimeContext` 并导出。
+2. `instanceMap` 当前推断为 `{}`，建议声明为 `Record<string, ComponentPublicInstance>` 或更具体的公开 API 类型。
+3. `window.$context` 依赖 `@ts-expect-error`，正式使用时应扩展 `Window` 类型声明。
+4. 全局 `$context` 只适合调试；多个渲染器同时存在时，后创建的上下文会覆盖前一个。
+5. 将控制能力暴露到全局会扩大可调用范围，生产环境需要明确权限和脚本信任边界。
+6. `runtimePage = ref(props.page)` 没有克隆页面，运行时修改可能直接改变 Pinia 中的编辑页面。
+7. 父组件整体替换 `page` prop 时，`runtimePage` 不会自动切换到新对象，需要使用 `toRef(props, 'page')` 或监听 prop。
+8. 节点只在 `onMounted()` 时注册一次，运行期间新增或删除节点后，`instanceMap` 可能过期。
+9. `getCurrentInstance()` 属于较底层 API，且可能返回 `null`，使用前应增加保护。
+10. `vm.refs[key][0]` 假设每个 ref 都是数组，需要确认当前动态 ref 的实际结构；不同用法下可能直接得到组件实例。
+11. `setStyle()` 修改 `style.xxx` 时，如果节点没有 `style` 对象，当前 `setValue()` 会在中间路径上报错。
+12. `setValue()` 不会自动创建缺失路径，也没有处理非法 key。
+13. `trigger()` 通过字符串方法名调用，拼写错误只能在运行时发现。
+14. `refreshNodesByDataId()` 会尝试刷新所有关联节点；如果其中某种物料没有公开 `refresh`，控制台会出现警告。
+15. 文本字号为 `0` 时会因为条件判断回退到 `14px`，如果需要支持零值，应判断 `fontSize != null`。
+16. 图表中解构出的 `error` 仍未用于界面错误反馈。
+17. `window.$context` 应在渲染器卸载时清理，避免保留已经失效的上下文。
+
+### 32.19 值得记住的实现思路
+
+#### 声明式数据修改和命令式调用需要分开
+
+修改文本、颜色、布局等状态适合更新 Schema；刷新图表、播放动画等动作适合调用组件公开方法。运行时上下文同时提供两种能力，但边界清晰。
+
+#### 组件实例只暴露必要能力
+
+使用 `defineExpose()` 可以建立物料的公开 API。运行时不应依赖组件内部所有变量，只调用明确允许的 `refresh`、`play`、`pause` 等方法。
+
+#### 节点 ID 是运行时控制的索引
+
+节点 ID 同时连接 Schema、模板 ref 和组件实例 Map。稳定且唯一的 ID 是外部脚本精准操作节点的基础。
+
+#### 批量联动应围绕业务关系查找节点
+
+`refreshNodesByDataId()` 不是写死多个节点 ID，而是根据共同数据源寻找节点。这使新增图表后不需要修改联动脚本。
+
+#### 运行时上下文是渲染器的门面
+
+外部代码通过上下文操作页面，而不是直接穿透到 Vue、Pinia、ECharts 或 DOM。内部实现可以调整，只要上下文 API 保持稳定，外部脚本就不必跟着修改。
+
+### 32.20 最终逻辑总结
+
+```text
+ScreenRenderer 接收 PageSchema
+  -> 创建 runtimePage
+  -> createRuntimeContext(runtimePage)
+  -> 渲染所有节点并为组件设置动态 ref
+  -> onMounted 收集组件实例
+  -> registerNodeInstance 建立 ID 与实例的映射
+  -> 临时将 context 暴露到 window.$context
+
+修改节点数据
+  -> getNode(id)
+  -> setAttribute / setProp / setStyle
+  -> setValue 修改响应式 Schema
+  -> Vue 自动更新物料
+
+调用节点方法
+  -> trigger(id, method, ...args)
+  -> instanceMap 找组件实例
+  -> 调用 defineExpose 公开的方法
+
+刷新关联图表
+  -> refreshNodesByDataId(dataId, params)
+  -> 找到使用该数据源的所有节点
+  -> 逐个 trigger refresh
+  -> 图表重新请求并更新数据
+```
+
+本节的核心，是为运行中的页面建立一套稳定控制接口，把外部脚本、页面 Schema 和 Vue 物料实例连接起来，为后续大屏交互、事件联动和脚本编排提供基础。
+
+<!-- 后续内容继续使用同级标题：## 33「...」 -->

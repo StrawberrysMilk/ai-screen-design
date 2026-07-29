@@ -16,6 +16,11 @@ const textMaterial: MaterialDefinition = {
       label: '颜色',
       key: 'style.color',
     },
+    {
+      type: 'number', // el-input-number
+      label: '字号',
+      key: 'style.fontSize',
+    },
   ],
   schema: {
     type: 'text',
@@ -29,6 +34,7 @@ const textMaterial: MaterialDefinition = {
     },
     style: {
       color: 'white',
+      fontSize: 16,
     },
     props: {
       content: 'hello world',
