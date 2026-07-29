@@ -7,12 +7,22 @@ import LayerPanel from '@/editor/panels/layer/index.vue'
 import CanvasRoot from '@/editor/canvas/index.vue'
 import PropertyPanel from '@/editor/panels/property/index.vue'
 import { storeToRefs } from 'pinia'
+import { useRoute } from 'vue-router'
+import { getPublishedPage } from '@/utils/publish.ts'
 
 defineOptions({
   name: 'ScreenEditor',
 })
 const editorStore = useEditorStore()
 
+const route = useRoute()
+const rawId = route.query.id
+const pageId = Array.isArray(rawId) ? rawId[0] : rawId
+if (pageId) {
+  // 如果有 pageId，则从 getPublishedPage 中获取当前页面的json数据，传给editorStore进行渲染？
+  const page = getPublishedPage(pageId)
+  editorStore.setPage(page)
+}
 const { dataSources } = storeToRefs(editorStore)
 
 provide('dataSources', dataSources)

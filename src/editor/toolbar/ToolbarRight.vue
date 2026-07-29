@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 import { ElMessage } from 'element-plus'
 import DataSourceManager from '@/editor/toolbar/components/DataSourceManager.vue'
 import { useRouter } from 'vue-router'
+import { publishPage } from '@/utils/publish.ts'
 defineOptions({
   name: 'ToolbarRight',
 })
@@ -121,8 +122,24 @@ function onSave() {
   ElMessage.success('保存成功')
 }
 
+/**
+ * 预览页面
+ */
 function onPreview() {
   router.push('/preview')
+}
+
+/**
+ * 发布页面
+ */
+function onPublish() {
+  /**
+   * 存到 local
+   */
+  // 发布逻辑
+  const id = publishPage(page.value)
+  router.push(`/screen?id=${id}`)
+  ElMessage.success('发布成功')
 }
 </script>
 
@@ -134,7 +151,7 @@ function onPreview() {
     <span @click="previewJson">
       <Icon icon="si:json-duotone" />
     </span>
-    <span>
+    <span @click="onPublish">
       <Icon icon="entypo:publish" />
     </span>
     <span @click="openDataSource">
