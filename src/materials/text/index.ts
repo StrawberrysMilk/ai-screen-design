@@ -39,6 +39,15 @@ const textMaterial: MaterialDefinition = {
     props: {
       content: 'hello world',
     },
+    events: [
+      {
+        // 事件类型 click
+        type: 'click',
+        name: 'fn',
+        code: `$context.refreshNodesByDataId('568')`,
+        // code: `$node.props.content = '你好呀'`,
+      },
+    ],
   },
 }
 

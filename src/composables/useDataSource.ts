@@ -73,10 +73,9 @@ export function useDataSource(dataId: Ref<string>) {
  * @param source
  * @param data
  */
-const requestMap = {}
+const requestMap: Record<string, Promise<any>> = {}
 export async function fetchData(source: DataSourceSchema, data?: Record<string, any>) {
   if (source.type === 'api') {
-    const url = source.url
     // 获取当前页面的查询参数
     const search = new URLSearchParams(location.search)
     // 将查询参数转换为对象
@@ -99,9 +98,9 @@ export async function fetchData(source: DataSourceSchema, data?: Record<string, 
     if (requestMap[key]) return requestMap[key]
 
     /**
-     * 没请求过，直接发送
+     * 只缓存进行中的请求。相同请求并发时复用 Promise，完成后允许再次刷新。
      */
-    const promise = await axios
+    const promise = axios
       .request(config)
       .then((res) => {
         return getValue(res.data, source?.responsePath)
@@ -115,7 +114,7 @@ export async function fetchData(source: DataSourceSchema, data?: Record<string, 
     // if (source.responsePath) {
     // }
     requestMap[key] = promise
-    return promise
+    return await promise
   } else {
     return Promise.resolve(source.data || [])
   }

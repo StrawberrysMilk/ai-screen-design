@@ -12,9 +12,9 @@ const props = defineProps<{ page: PageSchema }>()
 const runtimePage = ref(props.page)
 
 const context = createRuntimeContext(runtimePage)
-// @ts-expect-error 忽略，先挂着window 测试使用
-window.$context = context
-console.log(context, 'context')
+// // @ts-expect-error 忽略，先挂着window 测试使用
+// window.$context = context
+// console.log(context, 'context')
 
 const nodes = computed(() => runtimePage.value.nodes || [])
 const canvas = computed(
@@ -59,6 +59,10 @@ function init() {
 }
 
 const vm = getCurrentInstance()
+
+/**
+ * 注册节点实例，方便在运行时获取节点实例
+ */
 function registerNodeInstance() {
   const refs = {}
   for (const key in vm.refs) {
@@ -66,6 +70,29 @@ function registerNodeInstance() {
   }
   context.registerNodeInstance(refs)
 }
+
+/**
+ * 创建组件事件绑定
+ */
+function creatEvents(node: MaterialSchema) {
+  const listeners = {}
+  const events = node.events || []
+  events.forEach((event) => {
+    // {
+    //   // 事件类型 click
+    //   type: 'click',
+    //     name: 'fn',
+    //   code: `console.log('123')`,
+    // },
+    listeners[event.type] = () => {
+      const fn = new Function('$context', '$node', event.code)
+      fn(context, node)
+    }
+  })
+
+  return listeners
+}
+
 onMounted(() => {
   registerNodeInstance()
   init()
@@ -86,7 +113,12 @@ onMounted(() => {
         :key="node.id"
         :style="getNodeStyle(node, index)"
       >
-        <component :ref="node.id" :is="getMaterialComponent(node.type)" :schema="node" />
+        <component
+          :ref="node.id"
+          :is="getMaterialComponent(node.type)"
+          :schema="node"
+          v-on="creatEvents(node)"
+        />
       </div>
     </div>
   </div>

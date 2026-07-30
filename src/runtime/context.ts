@@ -90,6 +90,7 @@ export function createRuntimeContext(page: Ref<PageSchema>): runtimeContext {
 
   const trigger: runtimeContext['trigger'] = (id, name, ...args) => {
     const instance = instanceMap[id]
+    console.log(instance, 'instance')
     if (!instance) {
       console.warn(`没有找到${id}对应的组件实例`)
       return
@@ -105,11 +106,14 @@ export function createRuntimeContext(page: Ref<PageSchema>): runtimeContext {
   }
 
   const refreshNodesByDataId: runtimeContext['refreshNodesByDataId'] = (dataId, ...args) => {
+    console.log(dataId, 'dataId')
+    console.log(page.value, 'page.value')
     const nodes = page.value?.nodes?.filter((node) => node.dataId === dataId)
     if (!nodes || nodes.length === 0) {
       console.warn(`没有找到dataId为${dataId}对应的节点`)
       return
     }
+    console.log(nodes, 'nodes')
     nodes.forEach((node) => {
       trigger(node.id, 'refresh', ...args)
     })

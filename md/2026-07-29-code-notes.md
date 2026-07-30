@@ -1268,4 +1268,649 @@ ScreenRenderer 接收 PageSchema
 
 本节的核心，是为运行中的页面建立一套稳定控制接口，把外部脚本、页面 Schema 和 Vue 物料实例连接起来，为后续大屏交互、事件联动和脚本编排提供基础。
 
-<!-- 后续内容继续使用同级标题：## 33「...」 -->
+## 33「事件调度机制」
+
+### 33.1 本节目标
+
+第 32 节建立了运行时上下文，第 33 节进一步把上下文接入物料事件，让用户可以在节点配置中编写事件代码，并在大屏运行时执行。
+
+本次涉及 5 个文件，主要完成以下工作：
+
+1. 为物料节点增加事件配置结构 `MaterialEvent`。
+2. 允许节点保存事件类型、事件名称和事件代码。
+3. 在 `ScreenRenderer` 中将节点事件转换为 Vue 监听器。
+4. 使用 `new Function()` 执行配置中的事件代码。
+5. 向事件函数注入 `$context` 和 `$node` 两个运行时参数。
+6. 给文本物料增加一个点击事件示例。
+7. 修正动态请求复用逻辑，真正缓存进行中的 Promise。
+
+### 33.2 5 个文件的职责
+
+| 文件 | 本次职责 |
+| --- | --- |
+| `src/schema/material.ts` | 定义物料事件结构并挂载到节点 Schema |
+| `src/components/ScreenRenderer/index.vue` | 将事件配置转换为 Vue 监听器并执行代码 |
+| `src/materials/text/index.ts` | 为文本示例节点配置点击事件 |
+| `src/composables/useDataSource.ts` | 修正请求 Promise 复用并补充明确类型 |
+| `src/runtime/context.ts` | 为事件代码提供节点查找、修改和刷新能力 |
+
+### 33.3 事件调度的整体流程
+
+```mermaid
+flowchart TD
+  A[MaterialSchema.events] --> B[ScreenRenderer.creatEvents]
+  B --> C[按 event.type 创建监听器]
+  C --> D[Vue v-on 绑定到物料组件]
+  D --> E[用户触发 click 等事件]
+  E --> F[new Function 创建事件函数]
+  F --> G[注入 $context 和 $node]
+  G --> H[执行 event.code]
+  H --> I[修改节点或调用运行时上下文]
+  I --> J[Vue 响应式更新物料]
+```
+
+当前代码的事件链路是：
+
+```text
+节点 Schema 保存事件配置
+  -> 渲染器读取 events
+  -> 根据 type 生成 listeners 对象
+  -> 使用 v-on 绑定事件
+  -> 用户触发组件事件
+  -> 创建并执行事件函数
+  -> 注入 context 和当前 node
+  -> 事件代码修改页面或触发其他组件
+```
+
+### 33.4 `MaterialEvent`：事件数据结构
+
+文件：`src/schema/material.ts`
+
+新增事件接口：
+
+```ts
+export interface MaterialEvent {
+  // 事件类型，例如 click
+  type: string
+  // 事件名称
+  name: string
+  // 要执行的函数体
+  code: string
+}
+```
+
+节点 Schema 增加：
+
+```ts
+export interface MaterialSchema {
+  // 其他节点字段...
+  events?: MaterialEvent[]
+}
+```
+
+事件配置采用数组而不是单个对象，原因是一个节点未来可以绑定多个事件：
+
+```ts
+events: [
+  {
+    type: 'click',
+    name: 'refreshCharts',
+    code: `$context.refreshNodesByDataId('568')`,
+  },
+  {
+    type: 'mouseenter',
+    name: 'highlight',
+    code: `$context.setStyle('chart-1', 'opacity', 0.8)`,
+  },
+]
+```
+
+当前字段的实际使用情况：
+
+| 字段 | 当前作用 | 当前状态 |
+| --- | --- | --- |
+| `type` | 映射到 Vue 事件名 | 已使用 |
+| `name` | 标识事件名称 | 已定义但暂未参与执行 |
+| `code` | 作为函数体动态执行 | 已使用 |
+
+`name` 目前主要是配置语义和调试信息，后续可以用于日志、事件面板或事件唯一标识。
+
+### 33.5 `ScreenRenderer.creatEvents()`：事件配置转监听器
+
+文件：`src/components/ScreenRenderer/index.vue`
+
+渲染器新增：
+
+```ts
+function creatEvents(node: MaterialSchema) {
+  const listeners = {}
+  const events = node.events || []
+
+  events.forEach((event) => {
+    listeners[event.type] = () => {
+      const fn = new Function(
+        '$context',
+        '$node',
+        event.code,
+      )
+      fn(context, node)
+    }
+  })
+
+  return listeners
+}
+```
+
+函数的职责可以拆成四步：
+
+1. 读取当前节点的 `events` 数组。
+2. 遍历每一条事件配置。
+3. 使用 `event.type` 作为监听器 key。
+4. 使用闭包保存当前 `event` 和 `node`，返回一个事件处理函数。
+
+例如：
+
+```ts
+{
+  type: 'click',
+  name: 'refresh',
+  code: `$context.refreshNodesByDataId('568')`,
+}
+```
+
+会生成近似下面的监听器对象：
+
+```ts
+{
+  click: () => {
+    const fn = new Function(
+      '$context',
+      '$node',
+      `$context.refreshNodesByDataId('568')`,
+    )
+    fn(context, node)
+  },
+}
+```
+
+### 33.6 `v-on` 动态绑定
+
+节点组件模板新增：
+
+```vue
+<component
+  :ref="node.id"
+  :is="getMaterialComponent(node.type)"
+  :schema="node"
+  v-on="creatEvents(node)"
+/>
+```
+
+`v-on="listeners"` 是 Vue 的对象形式事件绑定。对象 key 是事件名称，value 是事件处理函数：
+
+```vue
+<component v-on="{ click: onClick, mouseenter: onEnter }" />
+```
+
+因此 `event.type = 'click'` 会被转换为组件上的 `click` 监听器。
+
+事件绑定仍然遵循组件数据流的边界：
+
+```text
+节点 Schema 提供事件配置
+  -> ScreenRenderer 负责适配
+  -> 物料组件接收 Vue 事件监听
+```
+
+物料组件不需要知道事件代码来自哪里，只负责正常触发自己的 DOM 或组件事件。
+
+### 33.7 事件函数的两个运行时参数
+
+当前代码通过：
+
+```ts
+const fn = new Function(
+  '$context',
+  '$node',
+  event.code,
+)
+fn(context, node)
+```
+
+向事件代码注入两个参数。
+
+#### `$context`
+
+`$context` 是第 32 节建立的运行时上下文，提供：
+
+```ts
+$context.getNode(id)
+$context.setAttribute(id, key, value)
+$context.setProp(id, key, value)
+$context.setStyle(id, key, value)
+$context.trigger(id, name, ...args)
+$context.refreshNodesByDataId(dataId, ...args)
+```
+
+示例：
+
+```ts
+$context.setProp(
+  $node.id,
+  'content',
+  '点击后修改的内容',
+)
+```
+
+#### `$node`
+
+`$node` 是当前触发事件的节点 Schema：
+
+```ts
+$node.id
+$node.type
+$node.props
+$node.style
+$node.dataId
+```
+
+它适合读取当前节点信息，或作为上下文方法的目标 ID：
+
+```ts
+$context.setStyle(
+  $node.id,
+  'color',
+  '#1677ff',
+)
+```
+
+两者的职责区别：
+
+| 参数 | 作用 |
+| --- | --- |
+| `$context` | 操作整个运行时页面和其他节点 |
+| `$node` | 获取当前事件来源节点的信息 |
+
+### 33.8 文本物料中的事件示例
+
+文件：`src/materials/text/index.ts`
+
+文本物料的默认 Schema 新增：
+
+```ts
+events: [
+  {
+    type: 'click',
+    name: 'fn',
+    code: `$context.refreshNodesByDataId('568')`,
+  },
+]
+```
+
+交互过程如下：
+
+```text
+用户点击文本组件
+  -> 触发 click 监听器
+  -> 执行事件 code
+  -> 调用 refreshNodesByDataId('568')
+  -> 找到所有 dataId 为 568 的节点
+  -> 逐个调用节点公开的 refresh
+  -> 图表重新请求数据
+```
+
+这个示例说明，事件来源节点不一定是被修改的节点。文本节点可以作为控制入口，触发其他图表节点刷新。
+
+注释中的另一种写法：
+
+```ts
+// code: `$node.props.content = '你好呀'`,
+```
+
+可以直接修改当前节点内容，但更推荐使用：
+
+```ts
+$context.setProp($node.id, 'content', '你好呀')
+```
+
+因为上下文方法可以集中处理节点不存在、路径非法和后续权限控制等问题。
+
+### 33.9 事件调度与运行时上下文的关系
+
+第 32 节提供能力，第 33 节提供触发入口：
+
+```mermaid
+flowchart LR
+  A[节点事件配置] --> B[事件监听器]
+  B --> C[事件代码]
+  C --> D[RuntimeContext]
+  D --> E[Schema 修改]
+  D --> F[组件方法调用]
+  D --> G[数据源批量刷新]
+```
+
+可以把它们理解为：
+
+```text
+事件配置 = 什么时候执行什么代码
+运行时上下文 = 代码执行时允许做什么
+```
+
+没有上下文，事件代码只能操作自身闭包中的内容；有了上下文，事件代码可以控制整张大屏。
+
+### 33.10 当前实现还不是完整的事件队列
+
+虽然本节名称是“事件调度机制”，但当前实现本质上是“事件监听与即时执行”：
+
+- 事件触发后立即创建函数并执行。
+- 没有事件队列。
+- 没有优先级。
+- 没有防抖或节流。
+- 没有异步任务等待机制。
+- 没有取消正在执行的事件。
+- 没有事件执行结果状态。
+
+当前阶段更准确的流程是：
+
+```text
+事件触发
+  -> 同步创建函数
+  -> 同步执行代码
+  -> 代码内部自行调用异步 API 或刷新方法
+```
+
+后续如果需要复杂联动，可以在当前入口上增加真正的调度层，例如 `dispatchEvent()`、任务队列、优先级和错误收集。
+
+### 33.11 `new Function()` 的执行特点
+
+`new Function()` 接收参数名和函数体字符串：
+
+```ts
+const fn = new Function(
+  '$context',
+  '$node',
+  event.code,
+)
+```
+
+与普通函数相比，它的函数体在运行时动态生成，可以执行页面配置中的字符串代码。
+
+优点：
+
+- 可以让页面事件配置更加灵活。
+- 不需要为每种事件写死处理函数。
+- 事件代码可以复用统一的 `$context` API。
+
+风险：
+
+- 事件代码拥有动态执行能力。
+- 如果代码来自不可信用户，可能执行恶意脚本。
+- 代码异常会直接中断事件处理。
+- 语法错误只能在用户触发事件时发现。
+- 当前没有沙箱、权限和执行超时。
+
+因此这个方案适合当前本地原型或可信配置环境，不适合直接执行任意外部用户输入。生产系统应考虑受限 DSL、白名单动作、沙箱 Worker 或服务端校验。
+
+### 33.12 事件异常处理
+
+当前执行没有 `try/catch`：
+
+```ts
+const fn = new Function('$context', '$node', event.code)
+fn(context, node)
+```
+
+建议后续增加：
+
+```ts
+try {
+  const fn = new Function('$context', '$node', event.code)
+  return fn(context, node)
+} catch (error) {
+  console.error(
+    `节点 ${node.id} 的 ${event.name} 事件执行失败`,
+    error,
+  )
+}
+```
+
+这样单个节点的事件错误不会直接扩散到整个页面，同时可以结合 `event.name` 输出更容易定位的日志。
+
+### 33.13 事件名与事件类型的区别
+
+当前配置同时保存：
+
+```ts
+{
+  type: 'click',
+  name: 'fn',
+  code: '...',
+}
+```
+
+两个字段应该承担不同职责：
+
+- `type`：Vue 或 DOM 要监听的事件类型，例如 `click`、`mouseenter`。
+- `name`：业务事件名称，例如 `refreshCharts`、`changeTheme`。
+
+当前 `creatEvents()` 只使用 `type`，`name` 未参与调度。后续可以用 `name` 做：
+
+- 事件配置列表展示。
+- 日志追踪。
+- 事件唯一标识。
+- 事件统计。
+- 事件权限控制。
+
+命名建议：
+
+```text
+type: click
+name: refreshCharts
+```
+
+不要把 `name` 和 `type` 都叫成模糊的 `event`，否则配置人员难以区分触发条件和业务动作。
+
+### 33.14 `useDataSource`：修复并发请求复用
+
+文件：`src/composables/useDataSource.ts`
+
+本次同时调整了请求 Map 的类型：
+
+```ts
+const requestMap: Record<string, Promise<any>> = {}
+```
+
+它表示：
+
+```text
+请求配置序列化后的 key
+  -> 正在执行中的 Promise
+```
+
+关键修改是去掉了创建 Promise 时的 `await`：
+
+```ts
+const promise = axios
+  .request(config)
+  .then((res) => {
+    return getValue(res.data, source?.responsePath)
+  })
+  .finally(() => {
+    delete requestMap[key]
+  })
+
+requestMap[key] = promise
+return await promise
+```
+
+### 33.15 为什么必须先放入 Map
+
+错误的顺序是：
+
+```text
+发起请求
+  -> await 等待完成
+  -> 请求完成后才放入 requestMap
+```
+
+这样请求执行期间 Map 为空，第二个相同请求无法复用。
+
+正确顺序是：
+
+```text
+创建 Promise
+  -> 立即放入 requestMap
+  -> 后续相同请求复用该 Promise
+  -> 请求完成后 finally 删除
+```
+
+并发请求流程：
+
+```mermaid
+sequenceDiagram
+  participant A as 第一次调用
+  participant M as requestMap
+  participant X as Axios
+  participant B as 第二次调用
+
+  A->>X: 发起请求
+  A->>M: 保存 Promise
+  B->>M: 查询相同 key
+  M-->>B: 返回已有 Promise
+  X-->>A: 返回响应
+  X-->>B: 复用相同结果
+  A->>M: finally 删除 key
+```
+
+这里保存的是“进行中的请求”，不是永久缓存。请求完成并删除 key 后，下次刷新会重新请求。
+
+### 33.16 请求复用与事件刷新结合
+
+如果两个事件几乎同时刷新同一个数据源：
+
+```text
+文本节点 click
+  -> refreshNodesByDataId('568')
+
+另一个事件同时触发
+  -> refreshNodesByDataId('568')
+```
+
+由于 `fetchData()` 使用相同请求配置生成相同 key，两个图表请求可以复用同一个进行中的 Promise，避免短时间内重复访问接口。
+
+因此第 33 节的事件联动和第 27 节的请求复用是可以组合起来的：
+
+```text
+事件调度负责触发刷新
+请求复用负责控制并发
+数据源 composable 负责更新物料数据
+```
+
+### 33.17 事件的响应式更新链路
+
+#### 修改当前文本
+
+```text
+click
+  -> fn(context, node)
+  -> context.setProp(node.id, 'content', '新内容')
+  -> setValue 修改 node.props.content
+  -> TextMaterial 读取 schema.props.content
+  -> Vue 更新 DOM
+```
+
+#### 刷新关联图表
+
+```text
+click
+  -> context.refreshNodesByDataId('568')
+  -> 找到所有 dataId = 568 的节点
+  -> trigger(node.id, 'refresh')
+  -> ChartMaterial 的公开 refresh
+  -> useDataSource.loadData
+  -> data 更新
+  -> ECharts setOption
+```
+
+#### 修改其他节点
+
+```text
+click
+  -> context.setStyle('chart-id', 'opacity', 0.5)
+  -> setValue 修改目标节点 style
+  -> 目标物料重新接收 schema
+  -> 目标物料响应式更新
+```
+
+### 33.18 当前实现的注意事项
+
+1. `creatEvents` 建议改名为 `createEvents`，当前函数名存在拼写错误。
+2. `new Function()` 没有安全隔离，不应直接执行不可信用户输入。
+3. 事件代码没有 `try/catch`，语法错误或运行时错误需要补充提示。
+4. `event.name` 当前没有参与执行，可以用于日志和事件管理。
+5. 同一节点配置多个相同 `type` 的事件时，后一个监听器会覆盖前一个，因为 `listeners[event.type]` 只有一个 key。
+6. 在模板中每次执行 `creatEvents(node)` 都会重新创建监听器对象和函数，节点较多时可改为缓存或预计算。
+7. 当前事件监听器没有显式传入原始事件对象；如需使用鼠标坐标，应将 `$event` 作为函数参数注入。
+8. 动态组件是否向外转发 `click`，取决于物料组件的根元素和 Vue 的事件继承行为。
+9. `event.type` 当前是普通字符串，建议限制为已支持的事件类型联合或配置白名单。
+10. 运行时事件可直接修改响应式页面对象，需要明确哪些字段允许运行时修改。
+11. `refreshNodesByDataId()` 依赖节点已经完成实例注册，过早触发时可能找不到组件实例。
+12. `requestMap` 已修复 Promise 保存时机，但 `Promise<any>` 仍然缺少具体响应类型。
+13. 请求失败时 `finally` 会删除 Map 记录，下一次事件可以重新请求，这是合理的重试行为。
+14. `requestMap` 是模块级 Map，所有渲染器共享同一份并发请求记录，key 设计必须包含完整请求配置。
+15. 调试用的 `console.log(instance)`、`console.log(dataId)` 和 `console.log(nodes)` 在正式代码中应移除或改为受控日志。
+
+### 33.19 值得记住的实现思路
+
+#### 事件配置应该是数据，而不是散落在组件代码中
+
+把事件保存到 `MaterialSchema.events` 后，页面可以被导出、发布、重新加载，事件行为也会跟着页面数据一起保存。
+
+#### 事件触发和事件动作要解耦
+
+`type` 负责定义什么时候触发，`code` 负责定义触发后做什么，`$context` 负责限制可以做什么。三者分开后，事件系统更容易扩展。
+
+#### 运行时脚本应该调用稳定的上下文 API
+
+事件代码调用 `$context.setProp()` 和 `$context.trigger()`，不直接依赖组件内部字段。物料内部重构时，只要公开 API 不变，页面事件无需修改。
+
+#### 并发请求复用需要缓存 Promise，而不是缓存结果
+
+事件可能在很短时间内连续触发。将进行中的 Promise 放入 Map，可以把相同请求合并；请求完成后删除，保证下一次刷新仍能取得最新数据。
+
+#### 事件调度最终需要安全边界
+
+原型阶段可以使用 `new Function()` 快速验证机制，生产阶段需要限制代码来源、可调用 API 和执行环境，不能把任意字符串执行能力直接暴露给普通用户。
+
+### 33.20 最终逻辑总结
+
+```text
+页面加载
+  -> ScreenRenderer 读取节点 events
+  -> createEvents 为每种 event.type 创建监听器
+  -> v-on 将监听器绑定到物料组件
+
+用户触发事件
+  -> 创建 new Function('$context', '$node', event.code)
+  -> 注入当前运行时上下文和当前节点
+  -> 执行事件代码
+
+事件修改页面
+  -> setProp / setStyle / setAttribute
+  -> setValue 修改响应式节点 Schema
+  -> Vue 自动刷新物料
+
+事件触发组件动作
+  -> trigger 查找节点实例
+  -> 调用 defineExpose 暴露的方法
+  -> 图表 refresh 重新加载数据
+
+多个节点同时刷新
+  -> refreshNodesByDataId 找到关联节点
+  -> fetchData 使用 requestMap 复用进行中的 Promise
+  -> 请求完成后删除 key
+```
+
+本节的核心，是建立“节点事件配置 → Vue 事件监听 → 动态事件代码 → 运行时上下文 → 页面或组件动作”的完整链路，并将事件联动与数据请求并发控制连接起来。
+
+<!-- 后续内容继续使用同级标题：## 34「...」 -->

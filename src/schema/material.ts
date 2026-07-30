@@ -5,6 +5,20 @@ interface Layout {
   height: number
 }
 
+export interface MaterialEvent {
+  // 事件类型 clikc
+  type: string
+  // 事件名称
+  name: string
+  /**
+   * 函数体
+   * const code = 'console.log(a)'
+   * const fn = new Function('a', code)
+   * fn(123456)
+   */
+  code: string
+}
+
 export interface MaterialSchema {
   type: string
   name: string
@@ -15,6 +29,7 @@ export interface MaterialSchema {
   props: Record<string, any>
   // 数据源id
   dataId?: string
+  events?: MaterialEvent[]
 }
 
 export interface settersSchema {
