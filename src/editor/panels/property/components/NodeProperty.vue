@@ -5,6 +5,7 @@ import { getMaterialSetters } from '@/materials'
 import FormCreate from '@/editor/panels/property/components/FormCreate.vue'
 import { Icon } from '@iconify/vue'
 import DataSource from '@/editor/panels/property/components/DatatSource.vue'
+import NodeEvents from '@/editor/panels/property/components/NodeEvents.vue'
 
 defineOptions({
   name: 'NodeProperty',
@@ -46,11 +47,13 @@ const layoutSetters = [
 const activeTab = ref('property')
 const active = ref('node')
 
-const visible = ref(false)
+const jsonVisible = ref(false)
 const jsonText = ref<string>('')
+const eventVisible = ref(false)
+const nodeEvents = useTemplateRef('nodeEvents')
 
 function previewJson() {
-  visible.value = true
+  jsonVisible.value = true
   jsonText.value = JSON.stringify(selectedNode.value, null, 2)
 }
 
@@ -64,7 +67,12 @@ function onConfirm() {
     id: selectedNode.value.id,
     type: selectedNode.value.type,
   })
-  visible.value = false
+  jsonVisible.value = false
+}
+
+function onConfirmEvent() {
+  nodeEvents.value?.save()
+  eventVisible.value = false
 }
 </script>
 
@@ -76,9 +84,14 @@ function onConfirm() {
       <span>
         {{ selectedNode?.name || '未选择组件' }}
       </span>
-      <span class="cursor-pointer" @click="previewJson">
-        <Icon icon="si:json-duotone" />
-      </span>
+      <div class="flex gap-10">
+        <span class="cursor-pointer" @click="eventVisible = true">
+          <Icon icon="codicon:symbol-event" />
+        </span>
+        <span class="cursor-pointer" @click="previewJson">
+          <Icon icon="si:json-duotone" />
+        </span>
+      </div>
     </div>
     <el-tabs v-model="activeTab" stretch>
       <el-tab-pane label="属性" name="property">
@@ -95,11 +108,20 @@ function onConfirm() {
         <DataSource />
       </el-tab-pane>
     </el-tabs>
-    <el-drawer :destroy-on-close="true" v-model="visible" title="编辑 JSON" size="800">
+    <!--    JSON配置    -->
+    <el-drawer :destroy-on-close="true" v-model="jsonVisible" title="编辑 JSON" size="800">
       <MonacoEditor v-model="jsonText" />
       <template #footer>
-        <el-button @click="visible = false">取消</el-button>
+        <el-button @click="jsonVisible = false">取消</el-button>
         <el-button type="primary" @click="onConfirm">确认</el-button>
+      </template>
+    </el-drawer>
+    <!--    事件配置    -->
+    <el-drawer :destroy-on-close="true" v-model="eventVisible" title="事件配置" size="800">
+      <NodeEvents ref="nodeEvents" />
+      <template #footer>
+        <el-button @click="eventVisible = false">取消</el-button>
+        <el-button type="primary" @click="onConfirmEvent">确认</el-button>
       </template>
     </el-drawer>
   </div>

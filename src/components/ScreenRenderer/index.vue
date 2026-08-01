@@ -84,9 +84,14 @@ function creatEvents(node: MaterialSchema) {
     //     name: 'fn',
     //   code: `console.log('123')`,
     // },
-    listeners[event.type] = () => {
-      const fn = new Function('$context', '$node', event.code)
-      fn(context, node)
+    if (event.handler) {
+      // 第二次了，不需要赋值了
+      listeners[event.type] = event.handler
+      return
+    }
+    event.handler = listeners[event.type] = (payload) => {
+      const fn = new Function('$context', '$node', '$payload', event.code)
+      fn(context, node, payload)
     }
   })
 

@@ -58,6 +58,13 @@ interface runtimeContext {
    *  refreshNodesByDataId('dataId1') => 触发所有dataId为dataId1的节点的refresh事件
    */
   refreshNodesByDataId(dataId: string, ...args: any[]): void
+
+  /**
+   * 触发 指定节点组件实例的事件
+   * @param id
+   * @param name
+   */
+  dispatch(id: string, name: string, payload?: any): void
 }
 
 export function createRuntimeContext(page: Ref<PageSchema>): runtimeContext {
@@ -119,6 +126,19 @@ export function createRuntimeContext(page: Ref<PageSchema>): runtimeContext {
     })
   }
 
+  const dispatch: runtimeContext['dispatch'] = (id, name, payload) => {
+    const node = getNode(id)
+    if (!node) {
+      console.warn(`没有找到${id}对应的组件实例`)
+      return
+    }
+    const event = node.events?.find((event) => event.name === name)
+    if (event) {
+      // 找到了事件执行
+      event.handler?.(payload)
+    }
+  }
+
   return {
     getNode,
     setAttribute,
@@ -127,5 +147,6 @@ export function createRuntimeContext(page: Ref<PageSchema>): runtimeContext {
     registerNodeInstance,
     trigger,
     refreshNodesByDataId,
+    dispatch,
   }
 }

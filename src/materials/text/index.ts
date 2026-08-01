@@ -45,6 +45,7 @@ const textMaterial: MaterialDefinition = {
         type: 'click',
         name: 'fn',
         code: `$context.refreshNodesByDataId('568')`,
+        title: '点击事件',
         // code: `$node.props.content = '你好呀'`,
       },
     ],
