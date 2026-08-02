@@ -808,4 +808,313 @@ Proxy 可以影响普通变量名称查找，但无法自动解决 `this`、构�
 
 本节的核心，是把事件代码从“直接在动态函数中执行”升级为“在受控变量作用域中执行”，并将执行机制抽离成独立运行时模块。它改善了能力管理和代码结构，但当前仍是轻量隔离方案，不应当被当作恶意代码安全沙箱。
 
-<!-- 后续内容继续使用同级标题：## 38「...」 -->
+## 38「为物料声明可触发事件」
+
+### 38.1 本节目标
+
+第 37 节完成了事件代码的沙箱执行。本节继续完善事件配置面板，让不同物料可以声明自己支持的可触发事件，配置人员在编辑事件类型时能够直接从物料定义中选择。
+
+此前事件类型使用普通输入框，用户需要手写 activeEvent.type。本节改为：
+
+物料 eventOptions -> 注册表查询 -> NodeEvents 选择器
+
+这样“物料支持哪些事件”成为物料元数据的一部分，同时保留 allow-create 带来的自定义事件能力。
+
+### 38.2 本节涉及的 4 个文件
+
+| 文件 | 本节职责 |
+| --- | --- |
+| `src/schema/material.ts` | 为 `MaterialDefinition` 增加 `eventOptions` 类型 |
+| `src/materials/text/index.ts` | 为文本物料声明事件列表 |
+| `src/materials/index.ts` | 保存完整物料定义并提供事件选项查询 API |
+| `src/editor/panels/property/components/NodeEvents.vue` | 读取当前物料事件选项并渲染选择器 |
+
+四个文件形成完整数据流：
+
+```text
+文本物料 eventOptions
+  -> register 注册
+  -> MaterialMap 保存完整物料定义
+  -> getMaterialEvenetOptions(type) 查询
+  -> NodeEvents.eventsOptions
+  -> el-select 更新 activeEvent.type
+```
+
+### 38.3 MaterialDefinition 增加事件声明
+
+文件：`src/schema/material.ts`。
+
+新增事件选项类型：
+
+```ts
+interface eventOptions {
+  label: string
+  value: string
+  [key: string]: any
+}
+```
+
+并在物料定义中增加：
+
+```ts
+export interface MaterialDefinition {
+  name: string
+  icon: string
+  group: string
+  setters: settersSchema[]
+  eventOptions: eventOptions[]
+  schema: Omit<MaterialSchema, 'id'>
+}
+```
+
+字段含义：
+
+| 字段 | 作用 |
+| --- | --- |
+| `label` | 配置面板展示给用户看的名称 |
+| `value` | 写入 `MaterialEvent.type` 的实际事件名 |
+
+例如 `{ label: '点击事件', value: 'click' }` 中，界面显示“点击事件”，运行时保存和绑定的是 `click`。
+
+### 38.4 文本物料声明可触发事件
+
+文件：`src/materials/text/index.ts`。
+
+新增事件选项包括：
+
+- 鼠标事件：`click`、`dblclick`、`mousedown`、`mouseup`、`mouseenter`、`mouseleave`、`mousemove`、`mousewheel`
+- 键盘事件：`keydown`、`keyup`
+- 组件事件：`vnodeMounted`
+- 测试自定义事件：`foo`
+
+示例：
+
+```ts
+eventOptions: [
+  { label: '点击事件', value: 'click' },
+  { label: '双击事件', value: 'dblclick' },
+  { label: '鼠标移入', value: 'mouseenter' },
+  { label: '键盘按下', value: 'keydown' },
+]
+```
+
+`value` 最终会成为动态组件 `v-on` 的事件 key，因此必须与组件实际能够触发的事件名称一致。
+
+### 38.5 物料注册表保存完整定义
+
+文件：`src/materials/index.ts`。
+
+原来只保存 setter：
+
+```ts
+const settersMap = new Map<string, settersSchema[]>()
+```
+
+本节改为保存完整物料定义：
+
+```ts
+const MaterialMap = new Map<string, MaterialDefinition>()
+```
+
+注册时写入：
+
+```ts
+MaterialMap.set(material.schema.type, material)
+```
+
+注册表从“字段缓存”升级为“领域对象缓存”：
+
+```text
+MaterialMap.get(type)
+  -> name
+  -> icon
+  -> group
+  -> setters
+  -> eventOptions
+  -> schema
+```
+
+这样后续增加物料元数据时，不需要继续创建多个平行 Map。原有 setter 查询保持兼容：
+
+```ts
+export function getMaterialSetters(type: string) {
+  const material = MaterialMap.get(type)
+  return material?.setters || []
+}
+```
+
+### 38.6 新增事件选项查询 API
+
+```ts
+export function getMaterialEvenetOptions(type: string) {
+  const material = MaterialMap.get(type)
+  return material?.eventOptions || []
+}
+```
+
+查询过程：
+
+1. 根据当前节点的 `type` 找到物料定义。
+2. 读取物料的 `eventOptions`。
+3. 物料不存在或没有选项时返回空数组。
+
+NodeEvents 不直接访问 Map，而是依赖这个查询函数。这样注册表内部结构可以变化，编辑器不需要同步修改。
+
+当前函数名 `getMaterialEvenetOptions` 中 `Evenet` 是拼写错误，后续建议改为 `getMaterialEventOptions`，并同步修改导入方。
+
+### 38.7 事件面板改为选择器
+
+文件：`src/editor/panels/property/components/NodeEvents.vue`。
+
+新增计算属性：
+
+```ts
+const eventsOptions = computed(() => {
+  return getMaterialEvenetOptions(selectedNode.value.type)
+})
+```
+
+模板从普通输入框改为：
+
+```vue
+<el-select
+  v-model="activeEvent.type"
+  allow-create
+  filterable
+  :options="eventsOptions"
+  placeholder="请选择事件名"
+/> 
+```
+
+交互含义：
+
+- `filterable`：输入文字筛选标准事件。
+- `allow-create`：允许输入物料未声明的自定义事件。
+- `:options`：展示当前物料自己的事件列表。
+- `v-model`：把选择结果写入事件草稿的 `type` 字段。
+
+当前节点类型改变时，`computed` 会重新查询选项。`eventsOptions` 与第 36 节的 `dispatchOptions` 不同：前者用于选择当前事件类型，后者用于选择跨节点联动目标。
+
+### 38.8 本节与运行时的关系
+
+本节主要优化配置阶段，没有修改第 35 节的 `dispatch`，也没有修改第 37 节的沙箱执行器。保存后的事件仍然类似：
+
+```ts
+{
+  type: 'click',
+  name: 'fn',
+  title: '点击事件',
+  code: '...',
+}
+```
+
+运行链路仍为：
+
+```text
+NodeEvents.save()
+  -> 保存 MaterialEvent
+  -> ScreenRenderer 按 event.type 绑定 handler
+  -> 用户触发事件
+  -> sandbox 执行 event.code
+```
+
+因此本节改变的是“如何选择 type”，不是“运行时如何执行 code”。
+
+### 38.9 当前实现的注意事项
+
+1. `eventOptions` 在 `MaterialDefinition` 中是必填字段，但 `area.ts`、`bar.ts`、`line.ts`、`pie.ts` 尚未补充该字段。
+2. 如果事件是所有物料的必备能力，应给图表物料补充实际事件选项；如果事件是可选能力，应改为 `eventOptions?: eventOptions[]`。
+3. `getMaterialEvenetOptions` 应改为 `getMaterialEventOptions`。
+4. 类型接口 `eventOptions` 按 TypeScript 习惯应改为大写开头的 `EventOption`。
+5. `[key: string]: any` 过于宽松，可以删除或改为明确扩展字段。
+6. `allow-create` 允许输入运行时并不支持的事件名称，保存前仍应增加校验。
+7. 新增事件时 `type` 仍是空字符串，不会自动选择第一个标准事件。
+8. `selectedNode.value.type` 没有空值保护，未选择节点时应禁用事件入口或返回空选项。
+9. `foo` 看起来是测试事件，正式功能中应确认是否保留。
+10. `mousewheel` 的浏览器兼容性需要确认，现代场景通常还会考虑 `wheel`。
+11. `vnodeMounted` 是否能通过当前动态组件的 `v-on` 触发，需要结合 Vue 实际行为验证。
+12. `MaterialMap` 建议按命名习惯改为 `materialMap`。
+13. 当前只有传入 `component` 时才写入物料 Map，未注册组件的物料无法通过查询 API 获取事件选项。
+14. 事件名称、删除逻辑、列表 key 的稳定身份问题仍沿用前面章节的实现。
+
+### 38.10 类型检查结果
+
+使用工作区自带的 Node.js 与 pnpm 执行：
+
+```bash
+pnpm type-check
+```
+
+检查未通过，共有 7 个错误。历史错误仍有 3 个，来自：
+
+`src/editor/toolbar/components/DataSourceManager.vue`
+
+本节新增 4 个错误，来自图表物料缺少必填的 `eventOptions`：
+
+- `src/materials/charts/area.ts`
+- `src/materials/charts/bar.ts`
+- `src/materials/charts/line.ts`
+- `src/materials/charts/pie.ts`
+
+错误本质是：
+
+```text
+MaterialDefinition.eventOptions 必填
+  -> 图表物料对象没有 eventOptions
+  -> TypeScript 报 TS2741
+```
+
+本节文件没有其他新增类型错误。
+
+### 38.11 值得记住的实现思路
+
+#### 元数据跟随物料定义
+
+属性编辑器和事件编辑器都可以从物料元数据生成界面。新增物料时，优先修改物料声明，不要把类型判断散落在编辑器组件中。
+
+#### 完整领域对象比平行字段 Map 更容易扩展
+
+从 `settersMap` 切换到 `MaterialMap` 后，setter、事件选项和未来能力都能从一个物料定义读取。
+
+#### 查询函数隔离内部存储
+
+组件只调用查询 API，不直接访问注册表 Map。这样缓存结构可以调整而不扩大修改范围。
+
+#### 展示字段与运行时字段分离
+
+`label` 面向配置人员，`value` 面向事件绑定。二者分离后界面文案可以独立调整。
+
+#### 公共类型扩展要检查存量实现
+
+给接口增加必填字段时，必须同步检查所有实现对象。若旧物料可以暂时没有该能力，应使用可选字段或默认值，避免一次改动造成全量类型错误。
+
+### 38.12 最终逻辑总结
+
+```text
+定义物料
+  -> MaterialDefinition 增加 eventOptions
+  -> 文本物料声明 click、dblclick、mouseenter 等事件
+
+注册物料
+  -> register() 保存完整 MaterialDefinition
+  -> MaterialMap 按 schema.type 建立索引
+
+查询选项
+  -> getMaterialEvenetOptions(type)
+  -> 返回当前物料支持的事件列表
+
+编辑事件
+  -> NodeEvents 根据 selectedNode.type 计算 eventsOptions
+  -> el-select 展示 label
+  -> 用户选择后把 value 写入 activeEvent.type
+  -> allow-create 保留自定义事件能力
+
+保存和运行
+  -> NodeEvents.save() 保存 MaterialEvent
+  -> ScreenRenderer 按 event.type 绑定 handler
+  -> sandbox 执行 event.code
+```
+
+本节的核心，是把“物料支持哪些事件”从事件编辑器中的自由输入提升为物料元数据，并通过注册表查询后驱动配置界面。
+
+<!-- 后续内容继续使用同级标题：## 39「...」 -->

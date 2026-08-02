@@ -7,13 +7,13 @@ const materials: MaterialDefinition[] = []
 // text =>> TextMaterial
 // bar =>> ChartsMaterial
 const componentMap = new Map<string, Component>()
-const settersMap = new Map<string, settersSchema[]>()
+const MaterialMap = new Map<string, MaterialDefinition>()
 
 export function register(material: MaterialDefinition, component?: Component) {
   materials.push(material)
   if (component) {
     componentMap.set(material.schema.type, component)
-    settersMap.set(material.schema.type, material.setters)
+    MaterialMap.set(material.schema.type, material)
   }
 }
 
@@ -49,7 +49,13 @@ export function getMaterialComponent(type: string) {
 }
 
 export function getMaterialSetters(type: string) {
-  return settersMap.get(type)
+  const material = MaterialMap.get(type)
+  return material?.setters || []
+}
+
+export function getMaterialEvenetOptions(type: string) {
+  const material = MaterialMap.get(type)
+  return material?.eventOptions || []
 }
 
 export function createNode(node) {

@@ -46,6 +46,12 @@ export interface settersSchema {
   [key: string]: any
 }
 
+interface eventOptions {
+  label: string
+  value: string
+  [key: string]: any
+}
+
 export interface MaterialDefinition {
   // regin 物料元数据
   name: string
@@ -53,5 +59,6 @@ export interface MaterialDefinition {
   group: string
   // endregion
   setters: settersSchema[]
+  eventOptions: eventOptions[]
   schema: Omit<MaterialSchema, 'id'>
 }

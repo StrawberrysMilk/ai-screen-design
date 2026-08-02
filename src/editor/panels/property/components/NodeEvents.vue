@@ -5,6 +5,7 @@ import { deepClone } from '@/utils'
 import { Icon } from '@iconify/vue'
 import type { MaterialEvent } from '@/schema/material.ts'
 import MonacoEditor from '@/components/MonacoEditor/index.vue'
+import { getMaterialEvenetOptions } from '@/materials'
 
 defineOptions({
   name: 'NodeEvents',
@@ -33,6 +34,10 @@ const dispatchOptions = computed(() => {
       }),
     }
   })
+})
+
+const eventsOptions = computed(() => {
+  return getMaterialEvenetOptions(selectedNode.value.type)
 })
 
 const activeEvent = ref()
@@ -139,7 +144,13 @@ defineExpose({
           <el-input v-model="activeEvent.name"></el-input>
         </el-form-item>
         <el-form-item label="类型">
-          <el-input v-model="activeEvent.type" />
+          <el-select
+            v-model="activeEvent.type"
+            allow-create
+            filterable
+            :options="eventsOptions"
+            placeholder="请选择事件名"
+          />
         </el-form-item>
         <el-form-item label="函数体">
           <div class="function-content flex flex-col w-full bg-[#1e1e1e]">
