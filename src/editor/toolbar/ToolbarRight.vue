@@ -141,10 +141,18 @@ function onPublish() {
   router.push(`/screen?id=${id}`)
   ElMessage.success('发布成功')
 }
+
+// AI 面板显示隐藏
+function showAiPanel() {
+  editorStore.panelVisible.ai = !editorStore.panelVisible.ai
+}
 </script>
 
 <template>
   <div class="flex gap-20 toolbar-right justify-end">
+    <span @click="showAiPanel">
+      <Icon icon="mingcute:ai-fill" />
+    </span>
     <span @click="onPreview">
       <Icon icon="fluent:preview-link-16-filled" />
     </span>

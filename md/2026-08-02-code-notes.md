@@ -1118,3 +1118,398 @@ MaterialDefinition.eventOptions 必填
 本节的核心，是把“物料支持哪些事件”从事件编辑器中的自由输入提升为物料元数据，并通过注册表查询后驱动配置界面。
 
 <!-- 后续内容继续使用同级标题：## 39「...」 -->
+## 39「AI会话面板」
+
+### 39.1 本节目标
+
+本节为编辑器增加 AI 会话面板的基础界面，完成面板显示/隐藏、消息列表展示和输入区域布局。
+
+当前实现定位为“会话面板 UI 骨架”：
+
+```text
+工具栏 AI 图标
+  -> 切换 editorStore.panelVisible.ai
+  -> ScreenEditor 根据状态计算面板宽度
+  -> AiPanel 显示或收起
+  -> MessageList 展示对话记录
+  -> 输入框暂存用户文本
+```
+
+目前还没有接入真实 AI 请求，发送按钮也尚未实现消息追加和接口调用。
+
+### 39.2 本节涉及的 6 个文件
+
+| 文件 | 本节职责 |
+| --- | --- |
+| `components.d.ts` | 自动增加 `ElAvatar` 全局组件声明 |
+| `src/stores/editor.ts` | 增加 AI 面板可见状态，并默认打开 AI 面板 |
+| `src/editor/panels/ai/index.vue` | AI 面板容器、消息状态和输入区 |
+| `src/editor/panels/ai/components/MessageList.vue` | 渲染人类消息与 AI 消息 |
+| `src/editor/index.vue` | 挂载 AI 面板并根据状态控制宽度 |
+| `src/editor/toolbar/ToolbarRight.vue` | 增加 AI 图标和显示隐藏操作 |
+
+### 39.3 整体组件关系
+
+```mermaid
+flowchart LR
+  A[ToolbarRight AI 图标] --> B[editorStore.panelVisible.ai]
+  B --> C[ScreenEditor.aiWidth]
+  C --> D[AiPanel]
+  D --> E[MessageList]
+  D --> F[输入框与发送按钮]
+```
+
+各层职责保持简单：
+
+- `ToolbarRight` 只负责触发显示状态切换。
+- `editorStore` 保存面板的全局可见状态。
+- `ScreenEditor` 负责页面布局和宽度计算。
+- `AiPanel` 负责会话区域组合。
+- `MessageList` 只负责消息列表展示。
+
+### 39.4 编辑器 Store 增加 AI 面板状态
+
+文件：`src/stores/editor.ts`。
+
+原有面板状态：
+
+```ts
+const panelVisible = reactive({
+  material: true,
+  layer: true,
+  property: true,
+})
+```
+
+本节调整为：
+
+```ts
+const panelVisible = reactive({
+  material: false,
+  layer: false,
+  property: false,
+  ai: true,
+})
+```
+
+字段作用：
+
+| 字段 | 含义 |
+| --- | --- |
+| `material` | 物料面板是否显示 |
+| `layer` | 图层面板是否显示 |
+| `property` | 属性面板是否显示 |
+| `ai` | AI 会话面板是否显示 |
+
+AI 面板默认值为 `true`，所以进入编辑器时会直接显示 AI 面板；其他三个传统面板默认关闭，形成当前课程截图中的布局状态。
+
+### 39.5 ToolbarRight 提供切换入口
+
+文件：`src/editor/toolbar/ToolbarRight.vue`。
+
+新增方法：
+
+```ts
+function showAiPanel() {
+  editorStore.panelVisible.ai = !editorStore.panelVisible.ai
+}
+```
+
+模板增加 AI 图标：
+
+```vue
+<span @click="showAiPanel">
+  <Icon icon="mingcute:ai-fill" />
+</span>
+```
+
+点击流程：
+
+```text
+点击 AI 图标
+  -> 读取当前 panelVisible.ai
+  -> 写入相反值
+  -> Pinia 响应式更新
+  -> ScreenEditor 重新计算 aiWidth
+  -> AI 面板展开或收起
+```
+
+这里直接修改 Pinia 中的响应式状态，适合当前工具栏和编辑器布局共享同一个 store 的场景。
+
+### 39.6 ScreenEditor 挂载 AI 面板
+
+文件：`src/editor/index.vue`。
+
+新增导入：
+
+```ts
+import AiPanel from '@/editor/panels/ai/index.vue'
+```
+
+新增宽度计算：
+
+```ts
+const aiWidth = computed(() => (
+  editorStore.panelVisible.ai ? '460px' : '0',
+))
+```
+
+模板将 AI 面板放在属性面板右侧：
+
+```vue
+<AiPanel
+  class="ai overflow-hidden transition-all"
+  :style="{ width: aiWidth }"
+/>
+```
+
+关闭时并没有销毁组件，而是将宽度变成 `0`，并配合 `overflow-hidden transition-all` 实现收起效果。
+
+```text
+ai = true
+  -> width: 460px
+  -> 面板可见
+
+ai = false
+  -> width: 0
+  -> 内容被裁剪并收起
+```
+
+### 39.7 AI 面板容器
+
+文件：`src/editor/panels/ai/index.vue`。
+
+组件使用 `MessageList` 和底部输入区组成：
+
+```vue
+<div class="ai-panel h-full">
+  <div class="p-20 h-full flex flex-col">
+    <MessageList
+      class="message-list flex-1"
+      :messages="messages"
+    />
+    <footer class="flex flex-col flex-none gap-10">
+      <el-input v-model="message" type="textarea" :rows="4" />
+      <el-button type="primary">发送</el-button>
+    </footer>
+  </div>
+</div>
+```
+
+布局结构：
+
+```text
+AiPanel
+  -> 外层占满高度
+  -> 内层纵向 Flex
+     -> MessageList flex-1，占用剩余空间
+     -> footer flex-none，固定在底部
+        -> 多行输入框
+        -> 发送按钮
+```
+
+这种布局适合聊天界面：消息区随剩余空间伸缩，输入区始终位于底部。
+
+### 39.8 会话消息状态
+
+当前面板内置两条演示消息：
+
+```ts
+const messages = ref([
+  {
+    type: 'human',
+    text: '你好，当前是什么模型？',
+  },
+  {
+    type: 'ai',
+    text: '你好，我是一个AI模型，专门用于回答问题和提供帮助。',
+  },
+])
+```
+
+`messages` 是本地响应式状态，目前只用于展示静态示例。`message` 保存输入框内容：
+
+```ts
+const message = ref('')
+```
+
+输入框通过 `v-model` 与 `message` 双向绑定，但发送按钮没有 `@click`，所以点击发送不会产生任何行为。
+
+### 39.9 MessageList 的组件边界
+
+文件：`src/editor/panels/ai/components/MessageList.vue`。
+
+组件通过 props 接收消息：
+
+```ts
+defineProps(['messages'])
+```
+
+模板使用 `v-for` 遍历：
+
+```vue
+<div
+  v-for="message in messages"
+  :key="message.id"
+  class="message-box flex gap-10"
+  :class="`message-box-${message.type}`"
+>
+  <el-avatar :size="28">
+    {{ message.type === 'ai' ? 'AI' : '我' }}
+  </el-avatar>
+  <div class="message-content">
+    {{ message.text }}
+  </div>
+</div>
+```
+
+组件只负责展示，不负责修改消息数组，也不负责调用 AI 接口。这符合“数据由父组件持有，列表组件负责呈现”的职责划分。
+
+### 39.10 消息样式和方向
+
+默认消息内容使用深色背景和圆角：
+
+```scss
+.message-content {
+  max-width: 85%;
+  background: #1b3039;
+  padding: 8px 10px;
+  border-radius: 4px 12px 12px 12px;
+}
+```
+
+人类消息通过类型 class 反转布局：
+
+```scss
+.message-box-human {
+  flex-direction: row-reverse;
+}
+```
+
+最终效果是：
+
+```text
+AI 消息    头像在左，内容在右
+用户消息  头像在右，内容在左
+```
+
+消息内容使用插值 `{{ message.text }}`，会进行文本转义，不会把消息文本当作 HTML 执行。
+
+### 39.11 自动生成的组件声明
+
+文件：`components.d.ts`。
+
+因为消息列表使用了：
+
+```vue
+<el-avatar :size="28">...</el-avatar>
+```
+
+`unplugin-vue-components` 自动在全局组件声明中增加：
+
+```ts
+ElAvatar: typeof import('element-plus/es')['ElAvatar']
+```
+
+这个文件是生成文件，不应手工添加业务代码。它只负责让 TypeScript 识别模板中的 Element Plus 全局组件。
+
+### 39.12 当前数据流
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant T as ToolbarRight
+  participant S as EditorStore
+  participant E as ScreenEditor
+  participant A as AiPanel
+  participant L as MessageList
+
+  U->>T: 点击 AI 图标
+  T->>S: 切换 panelVisible.ai
+  S-->>E: 响应式状态更新
+  E->>E: 重新计算 aiWidth
+  E-->>A: width=460px 或 0
+  A->>L: 传入 messages
+  L-->>U: 展示对话气泡
+```
+
+### 39.13 当前实现的注意事项
+
+1. `MessageList` 使用 `:key="message.id"`，但演示消息没有 `id`，应补充稳定 ID，否则列表更新时 key 为 `undefined`。
+2. `defineProps(['messages'])` 缺少 TypeScript 类型，建议声明 `Message[]`，并限制 `type` 为 `human | ai`。
+3. `messages` 与 `message` 目前都是 `AiPanel` 内部状态，尚未接入 Pinia 或 API。
+4. 发送按钮没有点击处理函数，输入内容不会追加到消息列表。
+5. AI 面板没有 loading、错误、空状态和请求中禁用按钮。
+6. 没有处理 Enter 发送、Shift+Enter 换行、发送后清空输入等聊天常见交互。
+7. 没有真实模型请求、流式输出、取消请求和会话历史持久化。
+8. `panelVisible` 的字段目前没有统一类型，后续面板增加时容易出现状态命名不一致。
+9. `showAiPanel()` 直接修改 store 状态，当前可用，但可以封装成 store action 以集中管理面板行为。
+10. AI 面板固定宽度 `460px`，窄屏下可能压缩画布，应增加响应式宽度或最小画布保护。
+11. `ScreenEditor` 中 `.material， .layer` 使用了全角逗号 `，`，该选择器存在样式失效风险；这不是本节 AI 逻辑新增的问题，但当前文件中仍然存在。
+12. AI 面板只用宽度收起，内容仍然挂载；若后续加入请求或定时任务，需要明确隐藏时是否暂停或销毁会话状态。
+
+### 39.14 类型检查结果
+
+使用工作区自带的 Node.js 与 pnpm 执行：
+
+```bash
+pnpm type-check
+```
+
+检查未通过，共有 7 个错误：
+
+- 3 个历史错误来自 `src/editor/toolbar/components/DataSourceManager.vue`。
+- 4 个第 38 节遗留错误来自图表物料缺少必填的 `eventOptions`：`area.ts`、`bar.ts`、`line.ts`、`pie.ts`。
+
+本节 AI 面板没有新增 TypeScript 错误。`components.d.ts` 的 `ElAvatar` 声明由组件自动扫描生成。
+
+### 39.15 值得记住的实现思路
+
+#### 面板显示状态应由共享状态统一管理
+
+工具栏只负责触发切换，编辑器负责布局，面板负责内容。三者通过 Pinia 的 `panelVisible.ai` 连接，避免工具栏直接操作面板 DOM。
+
+#### 布局容器和功能组件分离
+
+`ScreenEditor` 决定 AI 面板放在哪里、宽度是多少；`AiPanel` 只关心会话内容。这样面板内部改成真实请求逻辑时，不需要重写编辑器布局。
+
+#### 消息列表应该是展示型子组件
+
+`MessageList` 接收消息数组并渲染，父组件持有状态。后续发送、流式更新、错误重试可以留在 `AiPanel` 或抽到 composable 中。
+
+#### 先完成交互骨架，再接入模型能力
+
+当前先搭建显示、隐藏、列表和输入区域，后续再接入请求、状态和错误处理。这样可以先验证面板在编辑器中的空间关系。
+
+### 39.16 最终逻辑总结
+
+```text
+初始化编辑器
+  -> editorStore.panelVisible.ai = true
+  -> ScreenEditor 计算 aiWidth = 460px
+  -> AiPanel 挂载到属性面板右侧
+
+点击 AI 工具按钮
+  -> ToolbarRight.showAiPanel()
+  -> 切换 panelVisible.ai
+  -> aiWidth 在 460px 和 0 之间变化
+  -> AI 面板展开或收起
+
+展示会话
+  -> AiPanel 创建 messages 演示数据
+  -> MessageList 接收 messages
+  -> v-for 渲染 AI/用户消息
+  -> 根据 message.type 调整头像和气泡方向
+
+输入消息
+  -> el-input 通过 v-model 写入 message
+  -> 当前发送按钮尚未绑定处理逻辑
+
+自动声明
+  -> ElAvatar 被模板使用
+  -> components.d.ts 自动增加全局组件类型
+```
+
+本节的核心，是在编辑器中建立 AI 会话面板的 UI 和布局骨架：由 Pinia 管理面板可见性，编辑器负责空间编排，AI 面板负责会话组合，消息列表负责展示。当前仍属于静态原型，真实 AI 请求和消息发送流程留待后续章节实现。
+
+<!-- 后续内容继续使用同级标题：## 40「...」 -->

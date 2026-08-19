@@ -8,9 +8,10 @@ export const useEditorStore = defineStore('editor', () => {
   const { redo, undo, applyChange } = useUndoRedo()
 
   const panelVisible = reactive({
-    material: true,
-    layer: true,
-    property: true,
+    material: false,
+    layer: false,
+    property: false,
+    ai: true,
   })
 
   const page = ref<PageSchema>({

@@ -15,6 +15,7 @@
     "format": "prettier --write --experimental-cli src/"
   },
   "dependencies": {
+    "@langchain/vue": "1.0.30",
     "@tailwindcss/vite": "^4.3.2",
     "@types/mockjs": "^1.0.10",
     "axios": "^1.18.1",
