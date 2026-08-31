@@ -2165,4 +2165,150 @@ messages 更新
 本节把第 40 节的 SSE 数据接入进一步变成可用的聊天体验：AI 内容可以按 Markdown 展示，流式消息增长时默认保持在最新位置，同时不会打断用户查看历史消息。
 
 
-<!-- 后续内容继续使用同级标题：## 42「...」 -->
+## 42「持久化会话记录」
+
+### 42.1 本节目标
+
+第 41 节已经完成流式消息展示和智能滚动。本节为 AI 面板增加会话线程持久化能力，使页面刷新后仍能继续访问原来的会话，并提供删除当前会话的入口。
+
+核心思路是：由服务端通过 `threadId` 区分会话，前端把这个 ID 保存到浏览器本地存储；下次初始化 AI 面板时读取同一个 ID，`useStream()` 就能恢复对应的会话上下文。
+
+### 42.2 本节涉及文件
+
+| 文件 | 类型 | 本节职责 |
+| --- | --- | --- |
+| `src/editor/panels/ai/thread-storage.ts` | 核心文件 | 封装线程 ID 的读取、保存和删除 |
+| `src/editor/panels/ai/index.vue` | 核心文件 | 将本地线程 ID 接入 `useStream()`，并提供删除会话操作 |
+| `md/2026-08-02-code-notes.md` | 笔记文件 | 记录本节代码逻辑 |
+
+### 42.3 使用 threadId 标识会话
+
+`useStream()` 增加两个关键配置：
+
+```ts
+const { messages, submit, isLoading, stop, client } = useStream({
+  apiUrl: 'http://localhost:2024',
+  assistantId: 'screen_design_agent',
+  threadId: getThreadId(),
+  onThreadId: setThreadId,
+})
+```
+
+- `threadId`：初始化时读取本地保存的线程 ID；如果没有记录，则传入 `null`，由服务端创建新线程。
+- `onThreadId`：服务端创建或确认线程后回调 `setThreadId`，把新的 ID 保存到本地。
+- `client`：用于调用 LangGraph/LangChain 客户端的线程管理 API。
+
+因此，初始化和首次请求的关系是：
+
+```text
+加载 AiPanel
+  -> getThreadId() 读取本地线程 ID
+  -> useStream() 使用已有 ID 或创建新线程
+  -> onThreadId 回调保存新 ID
+  -> 后续请求继续使用同一线程
+```
+
+### 42.4 thread-storage：隔离本地存储细节
+
+文件 `src/editor/panels/ai/thread-storage.ts` 使用固定 key：
+
+```ts
+const THREAD_ID_KEY = 'ai_screen_design:threadId'
+```
+
+并提供三个小函数：
+
+```ts
+export function getThreadId() {
+  return localStorage.getItem(THREAD_ID_KEY)
+}
+
+export function setThreadId(threadId: string) {
+  localStorage.setItem(THREAD_ID_KEY, threadId)
+}
+
+export function deleteThreadId() {
+  localStorage.removeItem(THREAD_ID_KEY)
+}
+```
+
+这样 `AiPanel` 不需要直接操作存储 key，也不会把 `localStorage` 的读写细节散落到业务组件中。将来如果改用 Pinia、IndexedDB 或后端用户存储，只需替换这个模块的实现，面板调用方式可以保持不变。
+
+### 42.5 删除当前会话
+
+面板新增删除图标，并绑定 `onDElete()`：
+
+```ts
+async function onDElete() {
+  const id = getThreadId()
+  await client.threads.delete(id)
+  deleteThreadId()
+  location.reload()
+}
+```
+
+删除流程分为三步：
+
+1. 读取当前线程 ID。
+2. 调用客户端 API 删除服务端线程。
+3. 删除本地线程 ID，并刷新页面，让面板重新以新会话初始化。
+
+服务端数据和浏览器本地索引需要同时删除。只清理本地 key 会导致服务端会话残留，只删除服务端线程又可能让前端继续携带失效 ID。
+
+### 42.6 与消息流的整体关系
+
+持久化线程 ID 并不负责保存消息正文，消息仍然由 `useStream()` 管理：
+
+```text
+thread-storage
+  -> 保存 threadId
+
+AiPanel
+  -> 用 threadId 初始化 useStream
+  -> submit 发送 human 消息
+  -> useStream 获取该线程的 messages
+  -> MessageList 渲染历史消息和流式消息
+
+删除会话
+  -> client.threads.delete(threadId)
+  -> 删除 localStorage 中的 threadId
+  -> 刷新页面并开始新会话
+```
+
+### 42.7 当前实现注意事项
+
+1. 删除方法命名为 `onDElete`，大小写不符合常见的 `onDelete` 命名习惯，后续应统一。
+2. `getThreadId()` 可能返回 `null`，调用 `client.threads.delete(id)` 前应先判断 ID 是否存在。
+3. 删除接口没有 `try/catch` 和用户反馈。网络失败时不应直接清理本地 ID或刷新页面，建议增加确认弹窗、错误提示和 loading 状态。
+4. `location.reload()` 会刷新整个页面，当前实现简单可靠，但更理想的做法是清理状态后重新创建流式会话，减少页面重载。
+5. `localStorage` 只适合保存非敏感的线程标识；如果会话与用户权限相关，服务端仍必须校验当前用户是否有权访问该线程。
+6. `apiUrl` 和 `assistantId` 仍然写在组件中，部署环境变化时应抽取到配置或环境变量。
+7. 截图中的提交选择包含笔记文件和两个源码文件，本节只按这三个文件归纳；截图本身不属于代码内容。
+
+### 42.8 最终逻辑总结
+
+```text
+页面加载
+  -> localStorage.getItem('ai_screen_design:threadId')
+  -> useStream({ threadId })
+
+首次建立会话
+  -> 服务端生成 threadId
+  -> onThreadId(threadId)
+  -> localStorage.setItem(...)
+
+再次访问页面
+  -> 读取相同 threadId
+  -> 恢复同一会话上下文
+  -> messages 继续交给 MessageList 展示
+
+删除会话
+  -> 获取 threadId
+  -> 删除服务端线程
+  -> 删除本地 threadId
+  -> 刷新页面并创建新会话
+```
+
+本节把 AI 面板从“页面级临时对话”推进为“线程级持久化会话”：线程 ID 是前后端关联会话的索引，本地存储负责跨刷新保留索引，流式 Hook 负责实际消息通信，删除操作则同时清理服务端线程和本地记录。
+
+<!-- 后续内容继续使用同级标题：## 43「...」 -->
