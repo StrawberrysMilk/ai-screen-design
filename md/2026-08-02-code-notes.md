@@ -1512,4 +1512,479 @@ pnpm type-check
 
 本节的核心，是在编辑器中建立 AI 会话面板的 UI 和布局骨架：由 Pinia 管理面板可见性，编辑器负责空间编排，AI 面板负责会话组合，消息列表负责展示。当前仍属于静态原型，真实 AI 请求和消息发送流程留待后续章节实现。
 
-<!-- 后续内容继续使用同级标题：## 40「...」 -->
++## 40「sse流式输出」
+
+### 40.1 本节目标
+
+第 39 节完成了 AI 会话面板的静态 UI。本节接入 `@langchain/vue` 的 `useStream()`，让会话面板可以连接本地 LangGraph 服务，并接收 AI 的流式消息。
+
+本节完成的功能：
+
+1. 使用 `useStream()` 管理消息、提交方法和加载状态。
+2. 配置本地 AI 服务地址和 assistant ID。
+3. 提交用户消息并清空输入框。
+4. 防止空消息或重复请求。
+5. 支持 Enter 发送、Shift+Enter 换行。
+6. 兼容中文输入法组合输入。
+7. 在 AI 消息尚未产生文本时显示动态省略号。
+8. 为后续自动滚动消息列表预留监听位置。
+
+本节仍然没有修改运行时画布、事件系统或物料逻辑，改动集中在 AI 面板和消息展示层。
+
+### 40.2 本节实际涉及的文件
+
+| 文件 | 作用 | 是否记录为核心逻辑 |
+| --- | --- | --- |
+| `src/editor/panels/ai/index.vue` | 接入 `useStream()`，实现提交和键盘交互 | 是 |
+| `src/editor/panels/ai/components/MessageList.vue` | 适配流式消息空文本状态和 loading 动画 | 是 |
+| `package.json` | 增加 `@langchain/vue` 依赖 | 配套 |
+| `pnpm-lock.yaml` | 锁定 LangChain 及其传递依赖 | 配套 |
+
+截图中还显示了 `2026-08-02-code-notes.md`、`components.d.ts`、`src/editor/index.vue`、`src/stores/editor.ts` 和 `ToolbarRight.vue`，它们属于第 39 节 AI 面板基础布局；本节没有新的业务逻辑变化，不重复记录。
+
+### 40.3 整体数据流
+
+```mermaid
+sequenceDiagram
+  participant U as 用户
+  participant A as AiPanel
+  participant S as useStream
+  participant G as LangGraph 服务
+  participant L as MessageList
+
+  U->>A: 输入问题
+  U->>A: 点击发送或按 Enter
+  A->>A: 检查空消息和 loading
+  A->>S: submit({ messages: [human] })
+  S->>G: 通过 SSE 请求 assistant
+  G-->>S: 持续返回消息片段
+  S-->>A: 更新 messages
+  A->>L: 传入响应式 messages
+  L-->>U: 增量显示 AI 文本
+  A->>A: isLoading 控制发送按钮
+```
+
+核心关系是：
+
+```text
+useStream 管理网络与消息状态
+AiPanel 管理输入和提交动作
+MessageList 负责把消息状态渲染出来
+```
+
+### 40.4 安装 `@langchain/vue`
+
+文件：`package.json`。
+
+新增依赖：
+
+```json
+"@langchain/vue": "1.0.30"
+```
+
+该包提供 Vue 侧的 LangChain/LangGraph 会话能力，包括：
+
+- `useStream()`：建立流式会话状态。
+- `messages`：当前会话消息集合。
+- `submit()`：向后端提交新消息。
+- `isLoading`：表示请求是否仍在进行。
+
+`pnpm-lock.yaml` 同步增加 `@langchain/vue`、`@langchain/core`、`@langchain/langgraph-sdk`、`zod`、`langsmith` 等传递依赖。锁文件的作用是保证不同环境安装到一致的依赖版本，不承担 AI 业务逻辑。
+
+### 40.5 `useStream()` 初始化
+
+文件：`src/editor/panels/ai/index.vue`。
+
+新增：
+
+```ts
+import { useStream } from '@langchain/vue'
+
+const { messages, submit, isLoading } = useStream({
+  apiUrl: 'http://localhost:2024',
+  assistantId: 'screen_design_agent',
+})
+```
+
+配置字段：
+
+| 字段 | 含义 |
+| --- | --- |
+| `apiUrl` | LangGraph/LangChain 服务地址 |
+| `assistantId` | 后端助手或图的标识 |
+| `transport` | 可选传输方式，当前使用默认 SSE |
+
+当前注释说明也可以选择：
+
+```ts
+// transport: 'websocket'
+```
+
+但代码没有显式配置 `transport`，因此按库默认值使用 SSE。
+
+### 40.6 SSE 流式输出的含义
+
+SSE 是 Server-Sent Events，特点是：
+
+```text
+浏览器发起一次请求
+  -> 服务端保持连接
+  -> 服务端不断推送事件片段
+  -> 前端逐步更新消息
+  -> 生成完成后连接结束
+```
+
+与一次性 JSON 响应相比，SSE 可以让用户先看到生成中的内容，不需要等待完整答案生成后才刷新界面。
+
+在本项目中，`AiPanel` 不直接操作 `EventSource`，而是把连接、事件解析和消息状态交给 `useStream()`。组件只消费它暴露出的响应式 API。
+
+### 40.7 `messages` 替换静态演示数据
+
+第 39 节的消息数据是本地写死的：
+
+```ts
+const messages = ref([
+  { type: 'human', text: '...' },
+  { type: 'ai', text: '...' },
+])
+```
+
+本节改为从 `useStream()` 获取：
+
+```ts
+const { messages } = useStream(...)
+```
+
+模板仍然把消息传给：
+
+```vue
+<MessageList :messages="messages" />
+```
+
+因此 `MessageList` 不需要知道消息来自静态数组还是 SSE。它只需要遍历当前消息集合，网络来源被封装在 `AiPanel` 的组合式逻辑中。
+
+### 40.8 提交用户消息
+
+新增提交函数：
+
+```ts
+function onSubmit() {
+  if (!message.value.trim() || isLoading.value) return
+
+  submit({
+    messages: [
+      {
+        type: 'human',
+        content: message.value,
+      },
+    ],
+  })
+
+  message.value = ''
+}
+```
+
+执行过程：
+
+```text
+读取输入框 message
+  -> trim() 判断是否为空
+  -> 判断当前是否正在加载
+  -> 组装 LangChain human 消息
+  -> 调用 submit() 发起流式请求
+  -> 清空输入框
+```
+
+提交消息使用 `content` 字段，而第 39 节展示层读取的是 `message.text`。这说明 `useStream()` 返回的消息对象可能包含 LangChain 的消息结构，`MessageList` 当前通过 `text` 展示实际可用的文本字段。
+
+### 40.9 空消息保护
+
+```ts
+if (!message.value.trim() || isLoading.value) return
+```
+
+这里包含两个保护条件：
+
+#### 防止空消息
+
+`trim()` 会去掉首尾空白。用户只输入空格、换行或制表符时，不会发起无意义请求。
+
+#### 防止重复提交
+
+请求进行中时 `isLoading.value` 为真，重复点击发送不会再次调用 `submit()`。
+
+这个判断同时保护了网络层和会话状态，避免多个并发请求同时修改同一个消息列表。
+
+### 40.10 提交后清空输入
+
+```ts
+message.value = ''
+```
+
+提交调用后立即清空输入框：
+
+```text
+用户提交
+  -> 请求开始
+  -> 输入框恢复为空
+  -> 用户看到消息已经进入发送流程
+```
+
+当前实现没有保留草稿。如果后端请求失败，原输入内容不会自动恢复，后续可以根据产品需求增加失败重试或保留草稿机制。
+
+### 40.11 `isLoading` 与按钮状态
+
+模板：
+
+```vue
+<el-button
+  type="primary"
+  @click="onSubmit"
+  :loading="isLoading"
+>
+  发送
+</el-button>
+```
+
+`isLoading` 有两个作用：
+
+1. 在 `onSubmit()` 中阻止重复提交。
+2. 通过 Element Plus 按钮的 `loading` 状态给用户反馈。
+
+用户触发请求后，按钮会进入加载状态；流式响应结束或请求失败后，由 `useStream()` 更新状态。
+
+### 40.12 Enter 与 Shift+Enter
+
+输入框新增：
+
+```vue
+<el-input
+  v-model="message"
+  type="textarea"
+  :rows="4"
+  @keydown.enter="onKeydown"
+/>
+```
+
+键盘处理：
+
+```ts
+function onKeydown(e: KeyboardEvent) {
+  if (e.shiftKey || e.isComposing) return
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault()
+    onSubmit()
+  }
+}
+```
+
+交互规则：
+
+| 操作 | 结果 |
+| --- | --- |
+| Enter | 阻止 textarea 换行并提交消息 |
+| Shift+Enter | 保留换行，不提交 |
+| 中文输入法组合态 Enter | 不提交，交给输入法完成候选词确认 |
+| 其他按键 | 不处理 |
+
+`e.preventDefault()` 只在确定要提交时调用，因此 Shift+Enter 仍然可以正常插入换行。
+
+### 40.13 中文输入法保护
+
+```ts
+if (e.shiftKey || e.isComposing) return
+```
+
+`isComposing` 表示用户正在使用中文、日文等输入法组合文字。此时按 Enter 可能是确认候选词，而不是发送消息。
+
+如果忽略这个状态，用户输入中文时可能出现：
+
+```text
+输入拼音
+  -> 按 Enter 选择候选字
+  -> 事件被误判为提交
+  -> 半成品问题被发送到 AI
+```
+
+因此在聊天输入框中，`isComposing` 是比单纯判断 `e.key === 'Enter'` 更重要的兼容性条件。
+
+### 40.14 MessageList 适配流式空消息
+
+文件：`src/editor/panels/ai/components/MessageList.vue`。
+
+消息内容从直接插值改为条件渲染：
+
+```vue
+<div class="message-content">
+  <span v-if="message.text">
+    {{ message.text }}
+  </span>
+  <span v-else class="typing">...</span>
+</div>
+```
+
+流式消息可能先创建一个 AI 消息对象，文本内容随后才逐步到达。此时 `message.text` 为空，界面显示省略号，告诉用户 AI 正在生成。
+
+当第一段文本到达后：
+
+```text
+message.text 为空 -> 显示 ...
+message.text 有内容 -> 显示文本
+```
+
+### 40.15 typing 动画
+
+```scss
+.typing {
+  animation: typing-animation 1s infinite;
+}
+
+@keyframes typing-animation {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+```
+
+动画通过透明度在 0.3 和 1 之间循环变化，形成简单的“正在输入”反馈。
+
+它没有改变布局尺寸，只改变文字透明度，因此不会因为动画状态切换造成消息区域抖动。
+
+### 40.16 消息更新与滚动到底部
+
+`AiPanel` 增加了对 `messages` 的监听：
+
+```ts
+watch(messages, (value) => {
+  console.log('value ===>', value)
+  // nextTick(() => {
+  //   const container = document.querySelector('.message-container')
+  //   if (container) {
+  //     container.scrollTop = container.scrollHeight
+  //   }
+  // })
+})
+```
+
+当前监听主要用于调试，自动滚动代码暂时被注释。
+
+流式输出时消息会持续增长，理想行为是：
+
+```text
+messages 更新
+  -> 等待 DOM 更新完成
+  -> 获取消息容器
+  -> scrollTop = scrollHeight
+  -> 始终看到最新片段
+```
+
+使用 `nextTick()` 是为了确保 Vue 已经把最新消息文本渲染到 DOM 后再读取滚动高度。
+
+当前实现使用 `document.querySelector('.message-container')`，后续更适合使用 `useTemplateRef()`，避免全局选择器在多个面板或测试环境中产生歧义。
+
+### 40.17 组件和依赖边界
+
+```text
+AiPanel
+  -> useStream：连接流式 AI 服务
+  -> onSubmit：处理业务提交
+  -> onKeydown：处理输入交互
+  -> MessageList：渲染消息
+
+MessageList
+  -> 不发请求
+  -> 不修改会话
+  -> 只根据 messages 进行展示
+```
+
+这种边界让消息展示组件保持简单。以后替换 SSE 服务、增加重试、切换 WebSocket，主要修改 `AiPanel` 的数据来源，不需要重写列表样式。
+
+### 40.18 当前实现的注意事项
+
+1. `apiUrl: 'http://localhost:2024'` 是本地地址，部署到其他环境时应通过环境变量配置。
+2. 当前只配置了 `assistantId`，没有说明服务端认证、用户身份或会话线程 ID 的传递方式。
+3. SSE 服务必须允许前端来源访问，否则会受到浏览器 CORS 限制。
+4. `useStream()` 的消息结构与 `MessageList` 使用的 `text` 字段需要确认；如果返回标准 LangChain `content`，应做统一适配。
+5. `MessageList` 仍使用 `:key="message.id"`，实际流式消息必须保证每条消息有稳定 ID。
+6. `watch(messages, ...)` 当前只输出日志，生产代码应删除日志或实现滚动逻辑。
+7. 自动滚动不能无条件执行，否则用户阅读历史消息时可能被强制拉回底部；应判断用户是否已经接近底部。
+8. `onKeydown()` 中 `if (e.shiftKey || e.isComposing) return` 已经保证 Shift+Enter 不提交，后面的 `!e.shiftKey` 判断属于重复保护。
+9. `onSubmit()` 提交后立即清空输入，网络失败时用户无法直接恢复刚才的内容。
+10. 没有显式的错误状态、请求超时、取消请求和重试按钮。
+11. SSE 连接断开时，界面需要区分“生成完成”和“网络异常”，当前交给 `useStream()`，但面板没有展示错误反馈。
+12. `assistantId` 和本地端口写在组件中，后续应抽到配置文件或环境变量。
+13. `isLoading` 只控制提交按钮，输入框仍然可以继续编辑；是否禁用输入应按交互设计决定。
+14. 流式输出的滚动代码使用全局 DOM 查询，建议改为组件模板 ref。
+15. 打字动画只针对空 `message.text`，如果 SDK 使用 `content` 字段，动画判断和正文展示都需要同步调整。
+
+### 40.19 类型检查与依赖检查
+
+本节新增了 `@langchain/vue` 依赖，并同步更新 `pnpm-lock.yaml`。类型检查应使用工作区 Node.js 与 pnpm：
+
+```bash
+pnpm type-check
+```
+
+本次改动的主要验证点：
+
+- `useStream()` 可以被 Vue 组件正常导入。
+- `messages`、`submit`、`isLoading` 的返回值能够通过类型检查。
+- `el-input` 的键盘事件可以传入 `KeyboardEvent`。
+- MessageList 可以接收 SDK 返回的消息列表。
+
+当前项目原有的类型检查问题仍需单独处理，尤其是数据源编辑器的字符串与对象类型不一致，以及图表物料缺少 `eventOptions` 的问题。本节记录的重点是 SSE 接入逻辑，不将这些历史问题归因于流式功能。
+
+### 40.20 值得记住的实现思路
+
+#### 流式状态交给专用 Hook 管理
+
+组件不需要手写 SSE 连接、事件解析和消息拼接。`useStream()` 统一暴露消息、提交和 loading 状态，组件只负责把它们接到界面。
+
+#### 输入交互要兼顾中文输入法
+
+聊天框不能只判断 Enter。必须考虑 Shift+Enter 的换行语义和 `isComposing` 的输入法组合态，否则中文输入体验会被误触发发送破坏。
+
+#### 空文本也是一种 UI 状态
+
+流式消息刚创建时可能没有正文。用动态省略号表达“正在生成”，比显示空白气泡更容易让用户理解当前状态。
+
+#### 请求状态必须约束重复操作
+
+`isLoading` 同时用于逻辑保护和按钮反馈。一个状态源同时驱动行为与视觉，能避免按钮看似可点击但请求被重复发送。
+
+#### 自动滚动应等待渲染完成
+
+流式文本更新后，必须在 Vue DOM 更新完成后读取容器高度。`nextTick()` 是响应式状态和 DOM 之间的同步点。
+
+### 40.21 最终逻辑总结
+
+```text
+初始化 AiPanel
+  -> useStream 连接 http://localhost:2024
+  -> 指定 assistantId = screen_design_agent
+  -> 获得 messages、submit、isLoading
+
+用户输入
+  -> message 通过 v-model 更新
+  -> Enter 触发 onKeydown
+  -> Shift+Enter 保留换行
+  -> 中文输入法组合态不提交
+
+提交消息
+  -> trim 判断非空
+  -> isLoading 判断没有重复请求
+  -> submit 发送 human content
+  -> 清空 message
+
+SSE 返回
+  -> useStream 持续更新 messages
+  -> MessageList 重新渲染
+  -> 空 text 显示 ...
+  -> 有 text 显示增量内容
+  -> isLoading 控制发送按钮 loading
+
+滚动预留
+  -> watch 监听 messages
+  -> nextTick 后滚动到底部的逻辑待启用
+```
+
+本节的核心，是把第 39 节的静态 AI 面板连接到真实的流式会话状态：`useStream()` 负责 SSE 数据流，`AiPanel` 负责提交和输入交互，`MessageList` 负责展示增量消息。当前仍需补充错误处理、消息类型适配、自动滚动和生产环境配置。
