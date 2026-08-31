@@ -1117,7 +1117,6 @@ MaterialDefinition.eventOptions 必填
 
 本节的核心，是把“物料支持哪些事件”从事件编辑器中的自由输入提升为物料元数据，并通过注册表查询后驱动配置界面。
 
-<!-- 后续内容继续使用同级标题：## 39「...」 -->
 ## 39「AI会话面板」
 
 ### 39.1 本节目标
@@ -1988,3 +1987,182 @@ SSE 返回
 ```
 
 本节的核心，是把第 39 节的静态 AI 面板连接到真实的流式会话状态：`useStream()` 负责 SSE 数据流，`AiPanel` 负责提交和输入交互，`MessageList` 负责展示增量消息。当前仍需补充错误处理、消息类型适配、自动滚动和生产环境配置。
+
+## 41「流式渲染和智能滚动」
+
+### 41.1 本节目标
+
+第 40 节已经接入 `useStream()`，可以通过 SSE 接收 AI 的增量消息。本节继续完善 AI 会话面板，重点解决三个问题：
+
+1. 将 AI 返回的 Markdown 内容以结构化方式渲染出来。
+2. 兼容 SDK 可能返回的多种消息内容格式。
+3. 在流式内容不断增长时自动跟随底部，同时允许用户主动上滑查看历史内容。
+
+此外，本节增加“停止生成”操作，使用户可以主动中断当前流式请求。
+
+### 41.2 涉及文件
+
+| 文件 | 类型 | 本节职责 |
+| --- | --- | --- |
+| `src/editor/panels/ai/index.vue` | 核心文件 | 连接 `useStream()`，提交消息、清空输入、停止生成，并把 loading 状态传给消息列表 |
+| `src/editor/panels/ai/components/MessageList.vue` | 核心文件 | 提取和渲染消息文本，处理空消息占位、滚动状态和尺寸变化 |
+| `package.json` | 配套文件 | 增加 Markdown 流式渲染相关依赖 |
+| `pnpm-lock.yaml` | 配套文件 | 锁定新增依赖的版本和依赖关系 |
+| `components.d.ts` | 自动生成文件 | 补充 Element Plus 全局组件类型声明 |
+| `ai-screen-design.zip` | 提交产物 | 压缩包，不参与本节业务逻辑分析 |
+
+### 41.3 AiPanel：提交与停止流式请求
+
+`src/editor/panels/ai/index.vue` 通过 `useStream()` 获取以下状态和方法：
+
+```ts
+const { messages, submit, isLoading, stop } = useStream({
+  apiUrl: 'http://localhost:2024',
+  assistantId: 'screen_design_agent',
+})
+```
+
+各项职责如下：
+
+- `messages`：会话消息列表，随着 SSE 数据到达持续更新。
+- `submit`：提交用户消息并启动一次 AI 请求。
+- `isLoading`：表示当前是否仍在生成，用于防止重复提交和切换按钮状态。
+- `stop`：终止当前流式生成。
+
+提交流程保持简单：先判断输入是否为空或当前是否正在加载，再以 `human` 类型发送消息，提交后清空输入框。加载完成时显示“发送”按钮，生成过程中隐藏发送按钮并显示“停止”按钮，避免用户在同一请求期间重复发起会话。
+
+```text
+用户输入
+  -> onSubmit()
+  -> 判断空值和 isLoading
+  -> submit({ messages: [{ type: 'human', content }] })
+  -> 清空输入框
+
+生成中
+  -> isLoading = true
+  -> 显示停止按钮
+  -> onStop() 调用 stop()
+```
+
+### 41.4 MessageList：统一提取消息文本
+
+SDK 返回的消息正文不一定始终放在同一个字段中，因此组件定义了 `ChatMessage` 类型，并使用 `getMessageText()` 统一转换：
+
+1. 优先读取 `message.text`。
+2. 没有 `text` 时读取字符串形式的 `message.content`。
+3. 如果 `content` 是数组，则遍历每个内容块，读取 `text` 或 `content` 并拼接。
+4. 所有字段都不存在时返回空字符串。
+
+这样模板只需要处理一个统一的文本结果，不需要把 SDK 的数据格式判断散落在渲染逻辑中，也能兼容普通消息和流式消息。
+
+### 41.5 Markdown 流式渲染
+
+组件引入 `markstream-vue` 的 `MarkdownRender`：
+
+```vue
+<MarkdownRender
+  v-if="getMessageText(message)"
+  :render-code-blocks-as-pre="false"
+  :code-blocks-props="{ showCopyButtons: true }"
+  :content="getMessageText(message)"
+  mode="chat"
+  html-policy="escape"
+  :final="true"
+/>
+```
+
+配置含义：
+
+- `mode="chat"`：使用聊天消息适合的 Markdown 展示模式。
+- `render-code-blocks-as-pre="false"`：让代码块使用组件提供的渲染方式，而不是简单的原生 `pre`。
+- `showCopyButtons: true`：代码块提供复制操作，方便用户使用 AI 生成的代码。
+- `html-policy="escape"`：将正文中的 HTML 当作文本处理，避免 AI 输出被当成 HTML 执行。
+- `final="true"`：按完整消息状态渲染当前内容。
+
+消息正文从纯文本升级为 Markdown 后，标题、列表、强调内容和代码块都能保持结构，代码阅读体验也得到改善。
+
+### 41.6 过滤无效消息和显示生成占位
+
+流式请求刚开始时，最后一条 AI 消息可能已经创建，但正文还没有到达。组件通过 `visibleMessages` 过滤无文本消息：
+
+- 有正文的消息正常显示。
+- 没有正文但属于最后一条且正在加载的消息保留，用于显示动态 `...`。
+- 其他空消息直接隐藏，避免出现空白气泡。
+
+如果请求正在加载，但最后一条消息还不是 AI 消息，`hasPendingAssistantMessage()` 会额外显示一个 AI 占位消息。这样可以覆盖“AI 消息尚未写入列表”和“AI 消息已创建但正文为空”两种时序，用户能够明确看到系统正在生成内容。
+
+### 41.7 智能滚动：跟随底部但尊重用户阅读位置
+
+组件通过 `useTemplateRef()` 获取两个模板引用：
+
+- `messageContainerRef`：真正负责滚动的外层容器。
+- `messageListRef`：内部消息列表，用于观察内容尺寸变化。
+
+`scrollBottom()` 将外层容器的 `scrollTop` 设置为 `scrollHeight`，把视图移动到最新消息。`onScroll()` 则根据当前位置更新 `isScroll`：
+
+```ts
+isScroll =
+  container.scrollHeight - container.scrollTop - container.clientHeight <= 50
+```
+
+这里将距离底部 50px 以内视为“仍在底部附近”。只要 `isScroll` 为 `true`，消息高度变化时就自动滚动到底部；用户主动上滑超过 50px 后，`isScroll` 变为 `false`，后续流式文本增长不会把视图强行拉回底部。
+
+### 41.8 使用 ResizeObserver 监听流式内容增长
+
+流式文本不是一次性插入，而是不断追加。每次 Markdown 内容变长，都可能导致消息列表高度变化，因此组件在 `onMounted()` 中创建 `ResizeObserver`，观察 `messageListRef`：
+
+```ts
+const resizeObserver = new ResizeObserver(() => {
+  if (isScroll) scrollBottom()
+})
+```
+
+这种方式直接响应内容尺寸变化，不依赖某个固定的消息更新时机。组件卸载时调用 `resizeObserver.disconnect()`，避免继续观察已销毁的 DOM，也避免产生资源泄漏。
+
+### 41.9 依赖变化
+
+`package.json` 新增：
+
+```json
+{
+  "markstream-vue": "^2.0.6",
+  "stream-diffs": "^0.0.2"
+}
+```
+
+其中 `markstream-vue` 负责 Markdown 消息渲染，`stream-diffs` 是流式内容处理链路所需的依赖。`pnpm-lock.yaml` 已同步更新。`components.d.ts` 新增 `ElAlert` 全局组件类型声明，属于自动生成的类型文件，不是本节的核心逻辑。
+
+### 41.10 当前实现注意事项
+
+1. `apiUrl`、`assistantId` 和本地端口仍直接写在组件中，部署到其他环境时应抽到环境变量或统一配置。
+2. 当前面板没有展示请求失败、SSE 断开、超时和重试状态，`stop()` 也没有对应的用户反馈文案。
+3. 本节验证执行了 `pnpm type-check`，但项目现有类型问题导致检查失败：`DataSourceManager.vue` 中数据源 `params` 的字符串与对象类型不一致，四个图表物料缺少必需的 `eventOptions`。这些错误不在本节修改范围内。
+4. 当前提交的 `MessageList.vue` 还存在工作区未暂存修改，笔记整理没有改动或覆盖该源码变更。
+5. `visibleMessages` 和占位消息逻辑分别处理不同的空消息时序，后续可以通过更明确的消息状态模型进一步简化。
+
+### 41.11 最终逻辑总结
+
+```text
+AiPanel
+  -> useStream() 建立 SSE 会话
+  -> 用户提交 human 消息
+  -> isLoading 控制重复提交和按钮切换
+  -> stop() 支持中断生成
+
+messages 更新
+  -> MessageList 接收消息列表
+  -> getMessageText() 兼容 text/content/内容块数组
+  -> MarkdownRender 渲染正文和代码块
+  -> 空 AI 消息显示 ... 占位
+
+消息持续增量
+  -> ResizeObserver 发现列表高度变化
+  -> 距离底部 <= 50px 时自动滚到底部
+  -> 用户上滑超过 50px 后暂停自动滚动
+  -> 组件卸载时断开观察器
+```
+
+本节把第 40 节的 SSE 数据接入进一步变成可用的聊天体验：AI 内容可以按 Markdown 展示，流式消息增长时默认保持在最新位置，同时不会打断用户查看历史消息。
+
+
+<!-- 后续内容继续使用同级标题：## 42「...」 -->
