@@ -1,10 +1,12 @@
 import TextMaterial from '@/materials/text/component.vue'
 import type { MaterialDefinition } from '@/schema/material.ts'
+import { TextSchema } from '@/materials/text/schema.ts'
 
 const textMaterial: MaterialDefinition = {
   name: '文本',
   icon: 'solar:text-bold',
   group: 'info',
+  configSchema: TextSchema,
   setters: [
     {
       type: 'input', // el-input

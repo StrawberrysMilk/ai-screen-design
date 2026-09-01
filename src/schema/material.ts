@@ -1,3 +1,5 @@
+import type { ZodType } from 'zod'
+
 interface Layout {
   x: number
   y: number
@@ -23,7 +25,7 @@ export interface MaterialEvent {
   /**
    * 最终根据 code 生成的函数
    */
-  handler?: (...args: any[]) => any
+  handler?: (...args: any[]) => void
 }
 
 export interface MaterialSchema {
@@ -57,8 +59,9 @@ export interface MaterialDefinition {
   name: string
   icon: string
   group: string
+  configSchema: ZodType
   // endregion
   setters: settersSchema[]
-  eventOptions: eventOptions[]
+  eventOptions?: eventOptions[]
   schema: Omit<MaterialSchema, 'id'>
 }

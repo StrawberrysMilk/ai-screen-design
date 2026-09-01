@@ -64,3 +64,13 @@ export function createNode(node) {
     id: crypto.randomUUID(),
   }
 }
+
+export function getMaterialsConfigSchema() {
+  return materials
+    .filter((material) => material.configSchema)
+    .map((material) => ({
+      name: material.name,
+      type: material.schema.type,
+      configSchema: material.configSchema.toJSONSchema(),
+    }))
+}

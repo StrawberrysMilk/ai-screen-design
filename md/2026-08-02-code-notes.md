@@ -2311,4 +2311,276 @@ AiPanel
 
 本节把 AI 面板从“页面级临时对话”推进为“线程级持久化会话”：线程 ID 是前后端关联会话的索引，本地存储负责跨刷新保留索引，流式 Hook 负责实际消息通信，删除操作则同时清理服务端线程和本地记录。
 
-<!-- 后续内容继续使用同级标题：## 43「...」 -->
+## 43「让大模型理解设计器状态 && 意图识别」
+
+### 43.1 本节目标
+
+此前 Agent 收到用户消息后，只会把完整消息列表直接交给模型回答。模型不知道设计器当前有哪些节点、用户选中了什么、画布尺寸如何，也无法区分用户是在普通问答、创建页面还是修改页面。
+
+本节完成两项核心能力：
+
+1. 把页面、选中节点、画布和物料 Schema 加入 LangGraph 状态，让大模型能够基于设计器真实状态回答问题。
+2. 在正式处理任务前增加意图识别节点，把请求分类为 `message`、`page` 或 `edit`，再通过条件边进入不同任务节点。
+
+### 43.2 代码来源与涉及文件
+
+本节代码位于服务端仓库：
+
+```text
+D:\LearningDocument\EV2\ai-screen-server
+```
+
+对应提交：`bd4d252 fear(model): 让大模型理解设计器状态 && 意图识别`。
+
+| 文件 | 类型 | 本节职责 |
+| --- | --- | --- |
+| `apps/agent-server/src/agent/classification.ts` | 核心文件 | 定义分类结果 Schema，并调用模型识别用户意图 |
+| `apps/agent-server/src/agent/index.ts` | 核心文件 | 注册分类节点、任务节点和条件路由 |
+| `apps/agent-server/src/agent/state.ts` | 核心文件 | 扩展 Agent 状态，加入设计器上下文和分类结果 |
+| `apps/agent-server/src/agent/task-nodes/message.ts` | 核心文件 | 根据设计器状态回答普通问题 |
+| `apps/agent-server/src/agent/task-nodes/page.ts` | 任务占位 | 接收创建完整页面的任务 |
+| `apps/agent-server/src/agent/task-nodes/edit.ts` | 任务占位 | 接收修改当前页面的任务 |
+| `apps/agent-server/src/agent/task-nodes/index.ts` | 出口文件 | 集中导出三个任务节点 |
+| `apps/agent-server/src/ai/model.ts` | 配套文件 | 允许调用方覆盖模型配置 |
+| `apps/agent-server/src/utils/index.ts` | 工具文件 | 从消息历史中查找最后一条用户消息 |
+| `apps/agent-server/tsconfig.json` | 配置文件 | 将标准库升级为 `ESNext`，支持 `findLast()` |
+| `apps/agent-server/LEARNING_NOTES.md` | 文档文件 | 同步旧学习笔记中的节点命名 |
+
+### 43.3 扩展 LangGraph 状态
+
+`state.ts` 不再只保存 `messages`，还增加了设计器运行时上下文：
+
+```ts
+export const State = new StateSchema({
+  messages: MessagesValue,
+  page: z.record(z.string(), z.json()),
+  selectedNodeIds: z.array(z.string()),
+  schema: z.object({
+    material: z.array(z.record(z.string(), z.json())),
+    canvas: z.record(z.string(), z.json()),
+  }),
+  classification: ClassificationSchema,
+})
+```
+
+字段职责如下：
+
+- `messages`：用户与 AI 的会话历史。
+- `page`：当前页面数据，处理节点会从中读取 `nodes` 和 `canvas`。
+- `selectedNodeIds`：当前被用户选中的节点 ID。
+- `schema.material`：所有可用物料的 Schema 定义。
+- `schema.canvas`：画布属性的 Schema 定义。
+- `classification`：意图识别节点输出的任务分类。
+
+状态是所有节点共享的数据契约。把设计器上下文放进 State 后，后续问答、页面生成和页面编辑节点都能读取同一份运行时信息。
+
+### 43.4 用 Zod 定义意图分类结果
+
+`classification.ts` 使用 Zod 把模型输出限制为三个枚举值：
+
+```ts
+export const ClassificationSchema = z.object({
+  task: z.enum(['message', 'page', 'edit']),
+})
+```
+
+三个分类分别表示：
+
+- `message`：普通问答，尤其是询问当前页面、节点或数据源事实。
+- `page`：创建一个完整页面或大屏。
+- `edit`：修改当前页面。
+
+相比让模型返回自由文本，结构化输出可以直接作为程序的路由条件，避免通过字符串包含关系猜测意图。
+
+### 43.5 分类节点 classifyTask
+
+分类节点创建一个禁用流式输出的模型：
+
+```ts
+const chatModel = createChatModel({
+  disableStreaming: true,
+})
+```
+
+随后通过 `withStructuredOutput()` 绑定分类 Schema：
+
+```ts
+const model = chatModel.withStructuredOutput(ClassificationSchema, {
+  name: 'task_classification',
+  method: 'jsonSchema',
+})
+```
+
+模型输入由系统提示词和最后一条用户消息组成。工具函数 `getLastUserMessage()` 使用 `findLast()` 从后向前查找 `type === 'human'` 的消息，避免把 AI 回复误当作本轮意图。
+
+调用配置增加 `tags: ['nostream']`，分类过程不会作为聊天正文展示给前端。节点最终只返回：
+
+```ts
+return {
+  classification: { task },
+}
+```
+
+LangGraph 会把这个局部结果合并到当前 State，供下一步条件路由读取。
+
+### 43.6 使用条件边完成任务路由
+
+原来的图只有一个线性问答节点：
+
+```text
+START -> answerMessage -> END
+```
+
+本节调整为：
+
+```text
+START
+  -> classifyTask
+  -> 根据 state.classification.task 分流
+       message -> handleMessageTask -> END
+       page    -> handlePageTask    -> END
+       edit    -> handleEditTask    -> END
+```
+
+对应实现使用 `addConditionalEdges()`：
+
+```ts
+.addConditionalEdges('classifyTask', state => state.classification.task, {
+  message: 'handleMessageTask',
+  edit: 'handleEditTask',
+  page: 'handlePageTask',
+})
+```
+
+分类值与路由表的 key 一一对应。Zod 枚举同时限制了模型输出范围，因此正常情况下不会进入未注册的分支。
+
+### 43.7 普通问答如何理解设计器状态
+
+`handleMessageTask()` 从 State 中读取：
+
+```ts
+const { page, selectedNodeIds, messages, schema } = state
+const { nodes, canvas } = page
+const { material, canvas: canvasSchema } = schema
+```
+
+处理消息时先复制历史消息，再取出最后一条用户消息：
+
+```ts
+const _messages = [...messages]
+const lastMessage = _messages.pop()
+```
+
+模型最终收到三部分内容：
+
+1. 系统角色：AI 大屏设计器助手。
+2. 之前的对话历史 `_messages`。
+3. 重新组装的最后一条用户消息，其中包含用户问题和完整设计器上下文。
+
+注入提示词的数据包括：
+
+- 当前页面全部节点 `nodes`。
+- 当前选中节点 `selectedNodeIds`。
+- 当前画布状态 `canvas`。
+- 画布属性定义 `canvasSchema`。
+- 全部可用物料定义 `material`。
+
+这些对象通过 `JSON.stringify(..., null, 2)` 转为格式化 JSON。模型因此可以回答“当前选中了哪个组件”“画布尺寸是多少”“有哪些可用物料”等基于事实的问题，而不需要凭空猜测。
+
+### 43.8 page 与 edit 任务节点
+
+本节先建立了两个任务分支，但还没有实现真正的页面生成或修改：
+
+```ts
+export function handlePageTask() {
+  return {
+    messages: [new AIMessage('接到任务：根据用户的意图，生成大屏。')],
+  }
+}
+```
+
+```ts
+export function handleEditTask() {
+  return {
+    messages: [new AIMessage('接到任务：根据用户的意图，修改大屏的字典。')],
+  }
+}
+```
+
+当前价值是先验证“分类 -> 路由 -> 对应节点”的图结构。后续可以分别在两个节点内加入结构化页面生成、Schema 校验、差异计算和设计器操作工具。
+
+### 43.9 模型工厂支持调用级配置
+
+`createChatModel()` 增加可选参数：
+
+```ts
+export function createChatModel(
+  options?: ConstructorParameters<typeof ChatOpenAI>[0]
+) {
+  return new ChatOpenAI({
+    model: process.env.OPENAI_CHAT_MODEL,
+    modelKwargs: { store: false },
+    ...options,
+  })
+}
+```
+
+普通问答节点继续使用默认配置，分类节点则传入 `disableStreaming: true`。这样模型创建逻辑仍集中在一处，不同节点又可以按任务覆盖配置。
+
+本次还暂时注释了 `useResponsesApi: true`。由于 `...options` 位于默认配置之后，调用方传入的同名配置会覆盖默认值。
+
+### 43.10 ESNext 与 findLast
+
+工具函数使用：
+
+```ts
+messages.findLast(message => message.type === 'human')
+```
+
+为了让 TypeScript 标准库识别 `Array.prototype.findLast()`，`tsconfig.json` 的 `lib` 从 `ES2021` 调整为 `ESNext`。运行环境也必须实际支持该 API，否则需要升级 Node.js 或改用从后向前遍历的兼容实现。
+
+### 43.11 当前实现注意事项
+
+1. `classifyTask(state)` 和三个任务节点的 `state` 参数尚未显式声明类型，后续可从 State Schema 推导类型，减少字段拼写错误。
+2. `getLastUserMessage()` 可能返回 `undefined`。如果请求中没有 human 消息，传给 `model.invoke()` 前应增加校验和兜底。
+3. `handleMessageTask()` 假设最后一条消息就是当前用户消息，并直接读取 `lastMessage.text`；空消息列表或最后一条不是 human 时可能出现异常或语义错误。
+4. 页面、节点和全部物料 Schema 直接序列化进提示词，设计器规模变大后会明显增加 Token 消耗，需要考虑裁剪、摘要或只注入相关节点。
+5. 提示词中的运行时 JSON 属于不可信数据，节点名称或文本可能携带提示词注入内容，不能把模型输出直接当作可执行修改。
+6. `page` 和 `edit` 当前只是占位回复，尚未真正创建或修改设计器数据。
+7. State 中新增字段目前是必需字段，调用 Agent 的前端必须同步提交 `page`、`selectedNodeIds` 和 `schema`，否则图输入校验可能失败。
+8. 意图分类增加了一次额外模型调用，会增加延迟和调用成本；后续可以为明显指令增加规则快速路径，模糊情况再交给模型判断。
+9. 本节只整理截图对应的服务端提交，没有把 `ai-screen-design` 当前其他未提交改动混入笔记。
+
+### 43.12 构建验证
+
+在 `D:\LearningDocument\EV2\ai-screen-server` 执行：
+
+```bash
+pnpm --filter agent-server build
+```
+
+TypeScript 编译通过，当前 State Schema、结构化输出、`findLast()` 和条件路由代码可以完成构建。
+
+### 43.13 最终逻辑总结
+
+```text
+前端调用 Agent
+  -> 提交 messages
+  -> 同时提交 page、selectedNodeIds、schema
+
+START
+  -> classifyTask
+  -> 取最后一条 human 消息
+  -> 模型按 JSON Schema 输出 message/page/edit
+  -> classification 写回 State
+
+条件路由
+  -> message：注入编辑器状态与 Schema 后回答问题
+  -> page：进入创建页面任务节点，目前为占位实现
+  -> edit：进入修改页面任务节点，目前为占位实现
+  -> 对应节点完成后进入 END
+```
+
+本节的核心，是把 Agent 从“所有问题都直接聊天”升级为“先理解任务，再选择处理流程”。设计器状态让回答有事实依据，结构化意图识别让 LangGraph 可以稳定分流，也为后续真正实现页面生成和页面修改打下了节点基础。
+
+<!-- 后续内容继续使用同级标题：## 44「...」 -->

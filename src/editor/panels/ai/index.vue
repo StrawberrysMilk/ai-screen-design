@@ -3,11 +3,16 @@ import MessageList from './components/MessageList.vue'
 import { useStream } from '@langchain/vue'
 import { deleteThreadId, getThreadId, setThreadId } from '@/editor/panels/ai/thread-storage.ts'
 import { Icon } from '@iconify/vue'
+import { storeToRefs } from 'pinia'
+import { useEditorStore } from '@/stores/editor.ts'
+import { CanvasSchema } from '@/editor/schema/common.ts'
+import { getMaterialsConfigSchema } from '@/materials'
 defineOptions({
   name: 'AiPanel',
 })
 const message = ref('')
 
+const { page, selectedNodeIds } = storeToRefs(useEditorStore())
 // 替换掉我们原有的 messages 就ok 了
 const { messages, submit, isLoading, stop, client } = useStream({
   apiUrl: 'http://localhost:2024', // 这里的 apiUrl 是你在 LangChain Cloud 上创建的助手的 API URL
@@ -38,6 +43,12 @@ function onSubmit() {
         content: message.value,
       },
     ],
+    page: page.value,
+    selectedNodeIds: selectedNodeIds.value,
+    schema: {
+      material: getMaterialsConfigSchema(),
+      canvas: CanvasSchema.toJSONSchema(),
+    },
   })
   message.value = ''
 }
