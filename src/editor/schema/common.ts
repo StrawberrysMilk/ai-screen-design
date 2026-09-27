@@ -34,10 +34,13 @@ export const NodeBaseSchema = z
     type: z.string().describe('物料注册表中的真实物料类型'),
     name: z.string().describe('当前节点在编辑器中的名称'),
     id: z.string().describe('当前节点 ID，编辑器内唯一'),
-    locked: z.boolean().optional().describe('是否锁定节点，锁定后无法移动或编辑'),
+    // locked: z.boolean().optional().describe('是否锁定节点，锁定后无法移动或编辑'),
+    locked: z.boolean().nullable().describe('是否锁定节点，锁定后无法移动或编辑'),
     layout: LayoutSchema,
-    dataId: z.string().optional().describe('节点绑定的数据源 ID，用于数据驱动的物料'),
-    events: z.array(EventSchema).optional().describe('节点已配置的事件列表'),
+    // dataId: z.string().optional().describe('节点绑定的数据源 ID，用于数据驱动的物料'),
+    dataId: z.string().nullable().describe('节点绑定的数据源 ID；未绑定时为 null'),
+    // events: z.array(EventSchema).optional().describe('节点已配置的事件列表'),
+    events: z.array(EventSchema).nullable().describe('节点已配置的事件列表；未绑定时为 null'),
   })
   .describe('所有物料节点共用的基础字段')
 

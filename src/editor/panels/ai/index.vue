@@ -12,15 +12,29 @@ defineOptions({
 })
 const message = ref('')
 
-const { page, selectedNodeIds } = storeToRefs(useEditorStore())
+const editorStore = useEditorStore()
+const { page, selectedNodeIds } = storeToRefs(editorStore)
 // 替换掉我们原有的 messages 就ok 了
-const { messages, submit, isLoading, stop, client } = useStream({
+const { messages, submit, isLoading, stop, client, values } = useStream({
   apiUrl: 'http://localhost:2024', // 这里的 apiUrl 是你在 LangChain Cloud 上创建的助手的 API URL
   assistantId: 'screen_design_agent', // 这里的 assistantId 是你在 LangChain Cloud 上创建的助手的 ID
   // transport: 'websocket' // 你可以选择使用 websocket 或者 sse 作为传输方式，默认是 sse
-  threadId: getThreadId(), // 这里的 threadId 是你在本地存���中获取的线程 ID，用于保持会话状态
+  threadId: getThreadId(), // 这里的 threadId 是你在本地存储中获取的线程 ID，用于保持会话状态
   onThreadId: setThreadId, // 这里的 onThreadId 是一个回调函数，用于在本地存储中保存新的线程 ID
 })
+
+watch(
+  () => values.value.action,
+  (action: any) => {
+    if (!action) {
+      return
+    }
+    if (action.type === 'add_node') {
+      // 处理新增节点的逻辑
+      editorStore.addNode(toRaw(action.node))
+    }
+  },
+)
 
 // 处理键盘事件
 function onKeydown(e: KeyboardEvent) {
@@ -59,8 +73,8 @@ function onStop() {
 
 async function onDElete() {
   const id = getThreadId()
-  await client.threads.delete(id) // 删除当前线程
   deleteThreadId()
+  await client.threads.delete(id) // 删除当前线程
   location.reload()
 }
 
