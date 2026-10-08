@@ -23,11 +23,12 @@ function getMessageText(message: ChatMessage) {
   return ''
 }
 
-function hasPendingAssistantMessage() {
-  const lastMessage = props.messages.at(-1)
-  // An empty AI message already renders the inline `v-else` placeholder.
-  return props.isLoading && (!lastMessage || lastMessage.type !== 'ai')
-}
+// 被 showAiLoading 替换
+// function hasPendingAssistantMessage() {
+//   const lastMessage = props.messages.at(-1)
+//   // An empty AI message already renders the inline `v-else` placeholder.
+//   return props.isLoading && (!lastMessage || lastMessage.type !== 'ai')
+// }
 
 defineOptions({
   name: 'MessageList',
@@ -56,6 +57,11 @@ function onScroll() {
   if (!container) return
   isScroll = container.scrollHeight - container.scrollTop - container.clientHeight <= 50
 }
+
+const showAiLoading = computed(() => {
+  if (!props.isLoading) return false
+  return props.messages.at(-1)?.type !== 'ai'
+})
 
 onMounted(() => {
   const resizeObserver = new ResizeObserver(() => {
@@ -105,7 +111,7 @@ onMounted(() => {
       </div>
     </div>
 
-    <div v-if="hasPendingAssistantMessage()" class="message-box message-box-ai flex gap-10 py-10">
+    <div v-if="showAiLoading" class="message-box message-box-ai flex gap-10 py-10">
       <el-avatar :size="28">AI</el-avatar>
       <div class="message-content">
         <span class="typing">...</span>

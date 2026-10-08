@@ -182,6 +182,10 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   function updateNode(id, newNode: MaterialSchema) {
+    if (!newNode && typeof id === 'object') {
+      newNode = id
+      id = newNode.id
+    }
     // 使用 map 返回新列表，在列表中替换
     const newNodes = nodes.value.map((node) => (node.id === id ? newNode : node))
     // 设置新节点

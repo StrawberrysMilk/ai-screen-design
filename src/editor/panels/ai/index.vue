@@ -7,6 +7,7 @@ import { storeToRefs } from 'pinia'
 import { useEditorStore } from '@/stores/editor.ts'
 import { CanvasSchema } from '@/editor/schema/common.ts'
 import { getMaterialsConfigSchema } from '@/materials'
+import { deepClone } from '@/utils'
 defineOptions({
   name: 'AiPanel',
 })
@@ -14,6 +15,7 @@ const message = ref('')
 
 const editorStore = useEditorStore()
 const { page, selectedNodeIds } = storeToRefs(editorStore)
+const activeRunId = ref<string>(null)
 // 替换掉我们原有的 messages 就ok 了
 const { messages, submit, isLoading, stop, client, values } = useStream({
   apiUrl: 'http://localhost:2024', // 这里的 apiUrl 是你在 LangChain Cloud 上创建的助手的 API URL
@@ -21,17 +23,34 @@ const { messages, submit, isLoading, stop, client, values } = useStream({
   // transport: 'websocket' // 你可以选择使用 websocket 或者 sse 作为传输方式，默认是 sse
   threadId: getThreadId(), // 这里的 threadId 是你在本地存储中获取的线程 ID，用于保持会话状态
   onThreadId: setThreadId, // 这里的 onThreadId 是一个回调函数，用于在本地存储中保存新的线程 ID
+  onCreated({ runId }) {
+    activeRunId.value = runId
+  },
 })
 
+const map = {
+  add_node: 'addNode',
+  update_node: 'updateNode',
+  remove_node: 'removeNode',
+}
+
 watch(
-  () => values.value.action,
-  (action: any) => {
-    if (!action) {
+  () => values.value.actions,
+  (actions: any) => {
+    console.log(actions, 'actions')
+    if (!actions?.length) {
       return
     }
-    if (action.type === 'add_node') {
-      // 处理新增节点的逻辑
-      editorStore.addNode(toRaw(action.node))
+    for (const action of actions) {
+      // if (action.type === 'add_node') {
+      //   // 处理新增节点的逻辑
+      //   editorStore.addNode(toRaw(action.node))
+      // } else if (action.type === 'update_node') {
+      //   // 处理更新节点的逻辑
+      //   editorStore.updateNode(action.node.id, deepClone(toRaw(action.node)))
+      // }
+      const method = map[action.type]
+      editorStore[method](deepClone(toRaw(action.node)))
     }
   },
 )
@@ -68,6 +87,7 @@ function onSubmit() {
 }
 
 function onStop() {
+  client.runs.cancel(getThreadId(), activeRunId.value, true, 'rollback')
   stop()
 }
 
