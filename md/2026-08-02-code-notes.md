@@ -2583,4 +2583,163 @@ START
 
 本节的核心，是把 Agent 从“所有问题都直接聊天”升级为“先理解任务，再选择处理流程”。设计器状态让回答有事实依据，结构化意图识别让 LangGraph 可以稳定分流，也为后续真正实现页面生成和页面修改打下了节点基础。
 
-<!-- 后续内容继续使用同级标题：## 44「...」 -->
+## 44「让 Agent 操作多个节点」
+
+### 44.1 本节目标
+
+第 43 节已经让 Agent 能读取设计器状态并识别用户意图。本节把“修改页面”分支产生的操作结果接回前端编辑器，让 Agent 可以在一次回答中连续新增、更新或删除多个节点。
+
+主要变化是从读取单个 `action` 改为读取 `actions` 数组，再把每个动作映射到 Pinia Store 的节点操作方法。停止生成时同时取消当前 LangGraph run，并使用 rollback 策略回滚该次运行。
+
+### 44.2 本节涉及文件
+
+| 文件 | 本节职责 |
+| --- | --- |
+| `src/editor/panels/ai/index.vue` | 把页面状态提交给 Agent，监听多条 actions 并分派给 Store；记录 runId 和取消运行 |
+| `src/stores/editor.ts` | 让 `updateNode()` 同时兼容 `(id, node)` 与直接传入节点对象 |
+| `src/editor/panels/ai/components/MessageList.vue` | 收敛 AI 生成中的占位状态判断 |
+
+### 44.3 把编辑器上下文提交给 Agent
+
+AI 面板从 Pinia Store 读取 `page` 和 `selectedNodeIds`。用户提交问题时，除了消息本身，还附带当前页面、选中节点和 Schema：
+
+```ts
+submit({
+  messages: [{ type: 'human', content: message.value }],
+  page: page.value,
+  selectedNodeIds: selectedNodeIds.value,
+  schema: {
+    material: getMaterialsConfigSchema(),
+    canvas: CanvasSchema.toJSONSchema(),
+  },
+})
+```
+
+这让服务端可以根据当前画布结构规划节点操作，而不是只根据自然语言猜测页面现状。`deepClone` 在执行 action 时再用于复制模型返回的节点数据，避免把代理对象直接写入 Store。
+
+### 44.4 从单个 action 扩展为 actions 列表
+
+前一版只监听 `values.value.action`，且只处理新增节点。本节改为监听：
+
+```ts
+watch(
+  () => values.value.actions,
+  (actions) => {
+    if (!actions?.length) return
+    for (const action of actions) {
+      const method = map[action.type]
+      editorStore[method](deepClone(toRaw(action.node)))
+    }
+  },
+)
+```
+
+动作名称通过映射表转换为 Store 方法名：
+
+```ts
+const map = {
+  add_node: 'addNode',
+  update_node: 'updateNode',
+  remove_node: 'removeNode',
+}
+```
+
+因此一次模型响应可以按数组顺序执行多条节点变更：
+
+```text
+actions[0] -> add_node    -> editorStore.addNode(node)
+actions[1] -> update_node -> editorStore.updateNode(node)
+actions[2] -> remove_node -> editorStore.removeNode(node)
+```
+
+`toRaw()` 去掉 Vue Proxy 包装，`deepClone()` 创建独立数据副本，Store 收到的是普通对象而不是模型状态中的响应式引用。
+
+### 44.5 Store 更新方法兼容节点对象
+
+原来的 `updateNode()` 需要调用方传入节点 ID 和新节点：
+
+```ts
+updateNode(node.id, newNode)
+```
+
+本节增加兼容分支：
+
+```ts
+function updateNode(id, newNode) {
+  if (!newNode && typeof id === 'object') {
+    newNode = id
+    id = newNode.id
+  }
+  const newNodes = nodes.value.map((node) => (node.id === id ? newNode : node))
+  setNodes(newNodes)
+}
+```
+
+这样 AI action 可以统一传入 `action.node`，不必为 `update_node` 单独拆出 `id` 参数；属性面板等既有调用仍可继续使用双参数形式。
+
+### 44.6 取消当前模型运行
+
+`useStream()` 的 `onCreated` 回调保存本次运行的 `runId`：
+
+```ts
+onCreated({ runId }) {
+  activeRunId.value = runId
+}
+```
+
+用户点击停止时，面板先调用客户端取消对应 thread/run，并指定 rollback，再调用 `stop()` 停止前端流：
+
+```ts
+client.runs.cancel(getThreadId(), activeRunId.value, true, 'rollback')
+stop()
+```
+
+取消接口负责通知服务端中止运行并按指定策略处理状态；`stop()` 则结束当前 UI 流式请求。保存 `runId` 可以把停止操作关联到具体的一次生成任务。
+
+### 44.7 AI 生成占位状态
+
+`MessageList.vue` 将原来的 `hasPendingAssistantMessage()` 改为计算属性 `showAiLoading`：
+
+```ts
+const showAiLoading = computed(() => {
+  if (!props.isLoading) return false
+  return props.messages.at(-1)?.type !== 'ai'
+})
+```
+
+仅当请求仍在运行、且最后一条消息还不是 AI 消息时，列表才额外显示一个 AI 的 `...` 占位。如果最后一条已经是空内容的 AI 消息，它会由消息项自身的 `v-else` 占位展示，避免重复出现两个 loading 提示。
+
+### 44.8 当前实现注意事项
+
+1. `map[action.type]` 可能得到 `undefined`。建议对未知 action 类型做显式校验并跳过或报告错误，避免访问无效 Store 方法。
+2. watcher 每次触发都会遍历完整 `actions` 数组。如果服务端以累积数组形式逐步更新流，之前执行过的动作可能再次执行；需要确认 `values.actions` 是整批一次性返回还是增量/累积更新，必要时按 action ID 或已处理位置去重。
+3. `removeNode()` 要求传入包含 `id` 的节点对象，服务端 action schema 必须为删除动作提供完整节点或至少提供兼容对象。
+4. `updateNode()` 当前用对象整体替换匹配节点，不会合并字段；模型输出应包含完整节点结构，否则未输出的属性可能丢失。
+5. `activeRunId` 初始值允许为空，取消前应确认 thread ID 与 run ID 均有效；取消请求也应处理异步失败。
+6. `onStop()` 同时调用 `client.runs.cancel()` 和 `stop()`，需要验证服务端取消与客户端停止的时序，避免把取消错误展示成普通失败。
+7. `actions` 来自模型输出，应用前仍应做运行时 Schema 校验、节点 ID 校验和操作范围约束；不能只依赖 TypeScript 类型或动作名称映射。
+8. 当前仍保留 `console.log(actions)` 调试输出，正式版本应移除或改为受控日志。
+
+### 44.9 最终逻辑总结
+
+```text
+用户提交修改请求
+  -> 携带 page、selectedNodeIds、material schema、canvas schema
+  -> Agent 规划并返回 actions[]
+
+前端监听 values.actions
+  -> 逐条读取 action.type 和 action.node
+  -> add_node    映射到 addNode
+  -> update_node 映射到 updateNode
+  -> remove_node 映射到 removeNode
+  -> toRaw + deepClone 后写入 Pinia Store
+
+生成过程中点击停止
+  -> 读取 threadId 和 activeRunId
+  -> client.runs.cancel(..., 'rollback')
+  -> stop() 结束前端流
+```
+
+本节建立了 Agent 输出与设计器操作之间的执行通路：服务端把自然语言规划成动作列表，前端负责把每条动作分派给已有 Store API，多个节点由此可以在一次生成中被连续操作。
+
+<!-- 后续内容继续使用同级标题：## 45「...」 -->
