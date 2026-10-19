@@ -5,9 +5,10 @@ import { deleteThreadId, getThreadId, setThreadId } from '@/editor/panels/ai/thr
 import { Icon } from '@iconify/vue'
 import { storeToRefs } from 'pinia'
 import { useEditorStore } from '@/stores/editor.ts'
-import { CanvasSchema } from '@/editor/schema/common.ts'
+import { CanvasSchema, DataSourceSchema } from '@/editor/schema/common.ts'
 import { getMaterialsConfigSchema } from '@/materials'
 import { deepClone } from '@/utils'
+import { toJSONSchema } from 'zod'
 defineOptions({
   name: 'AiPanel',
 })
@@ -32,6 +33,8 @@ const map = {
   add_node: 'addNode',
   update_node: 'updateNode',
   remove_node: 'removeNode',
+  add_data_source: 'addDataSource',
+  update_data_source: 'updateDataSource',
 }
 
 watch(
@@ -78,9 +81,11 @@ function onSubmit() {
     ],
     page: page.value,
     selectedNodeIds: selectedNodeIds.value,
+    dataSources: editorStore.dataSources,
     schema: {
       material: getMaterialsConfigSchema(),
       canvas: CanvasSchema.toJSONSchema(),
+      dataSource: toJSONSchema(DataSourceSchema),
     },
   })
   message.value = ''

@@ -2742,4 +2742,220 @@ const showAiLoading = computed(() => {
 
 本节建立了 Agent 输出与设计器操作之间的执行通路：服务端把自然语言规划成动作列表，前端负责把每条动作分派给已有 Store API，多个节点由此可以在一次生成中被连续操作。
 
-<!-- 后续内容继续使用同级标题：## 45「...」 -->
+## 45「构建 ECharts 的 RAG 知识库」
+
+### 45.1 本节目标
+
+本节对应提交 `c7b26fb fear(editor): 构建Echarts的RAG知识库`，截图中包含两个改动文件：
+
+| 文件 | 类型 | 本节职责 |
+| --- | --- | --- |
+| `src/materials/charts/component.vue` | 核心文件 | 兼容 AI 生成的 ECharts 配置，并把数据源结果安全注入图表配置 |
+| `components.d.ts` | 自动生成文件 | 同步移除已经不存在的 `ElAlert` 全局组件声明 |
+
+从代码实现看，本次并没有新增独立的向量检索或文档召回模块，而是先完善 ECharts 物料对 AI 生成配置的承载能力。这样后续把 ECharts Schema、示例配置和数据结构作为 Agent 的知识输入时，生成结果即使缺少传统预设字段，也能在前端正常渲染。
+
+### 45.2 原有问题：默认配置假设过强
+
+旧实现直接读取：
+
+```ts
+const _option = props.schema.props.option
+```
+
+并在注入数据时继续访问：
+
+```ts
+dataset: {
+  ..._option.dataset,
+  source: data.value || _option.dataset.source,
+}
+```
+
+这段逻辑隐含了两个假设：
+
+1. `props.schema.props` 和 `props.schema.props.option` 一定存在。
+2. `option.dataset` 一定存在，并且包含 `source`。
+
+物料预设通常满足这些条件，但 AI 生成的图表配置可能只包含 `series`、坐标轴或标题，不一定生成 `dataset`。此时读取 `_option.dataset.source` 会触发运行时错误，图表组件无法完成渲染。
+
+### 45.3 规范化 option 和 dataset
+
+新的计算属性先为配置提供空对象兜底：
+
+```ts
+const _option = props.schema.props?.option ?? {}
+const configuredDataset = _option.dataset
+const source = data.value ?? configuredDataset?.source
+```
+
+三步分别解决不同问题：
+
+- `props.schema.props?.option`：允许物料属性尚未完整生成。
+- `?? {}`：没有 option 时仍能得到可传给 ECharts 的对象。
+- `configuredDataset?.source`：没有 dataset 时不会继续访问空对象的属性。
+
+这里使用空值合并运算符 `??`，因此空数组等有效数据不会被误判为无数据。数据源返回的空数组会作为明确的 `source` 保留下来，而不是错误回退到配置里的默认数据。
+
+### 45.4 动态选择数据源
+
+数据源优先级由以下表达式决定：
+
+```ts
+const source = data.value ?? configuredDataset?.source
+```
+
+对应规则是：
+
+```text
+存在运行时数据 data.value
+  -> 使用数据源结果
+
+运行时数据为空值，但 option.dataset.source 存在
+  -> 使用图表配置中的默认数据
+
+两者都不存在
+  -> 保留原始 option，不强行创建 dataset
+```
+
+当 `source` 不存在时，组件直接返回原配置：
+
+```ts
+if (source === undefined) {
+  return _option
+}
+```
+
+这一步很关键：对于不依赖 `dataset` 的 AI 图表配置，组件不会为了套用数据源逻辑而添加一个空的数据集，也不会读取不存在的 `source` 字段。
+
+当存在数据时，组件才合并数据集：
+
+```ts
+return {
+  ..._option,
+  dataset: {
+    ...configuredDataset,
+    source,
+  },
+}
+```
+
+这样可以保留原来 `dataset` 中的其他配置，同时只覆盖最终使用的 `source`。
+
+### 45.5 图表配置的完整更新流程
+
+`ChartMaterial` 的数据流可以整理为：
+
+```text
+节点 schema
+  -> 读取 schema.dataId
+  -> useDataSource(dataId)
+  -> 获得 data、loading、refresh
+
+计算 option
+  -> 读取节点原始 ECharts option
+  -> 优先使用运行时 data
+  -> 没有运行时 data 时回退到 dataset.source
+  -> 没有任何 source 时保留原 option
+
+图表更新
+  -> option 深度变化
+  -> chart 已完成初始化
+  -> chart.setOption(newVal)
+```
+
+`useDataSource()` 继续负责静态数据、API 数据、轮询和请求复用；本节只调整图表组件如何把它返回的结果转换成 ECharts option。职责边界保持清晰，取数逻辑没有被搬进图表组件。
+
+### 45.6 防止初始化时调用 chart.setOption
+
+组件通过 `watch(option, ..., { deep: true })` 监听配置变化。由于计算属性可能在 ECharts 实例初始化之前就发生变化，新的 watcher 回调增加了保护：
+
+```ts
+watch(
+  option,
+  (newVal) => {
+    if (!chart) return
+    chart.setOption(newVal)
+  },
+  { deep: true },
+)
+```
+
+初始化顺序变成：
+
+1. Vue 创建模板节点。
+2. `onMounted()` 中调用 `init(chartRef.value)`。
+3. 使用当前 `option.value` 完成第一次 `setOption()`。
+4. 后续 option 或数据变化再由 watcher 更新图表。
+
+如果 watcher 在第 2 步之前触发，它会直接返回，不会对未创建的 ECharts 实例调用方法。
+
+### 45.7 与 AI 生成图表配置的关系
+
+AI 生成图表时，配置可能采用两种形式：
+
+```ts
+// 使用 dataset 的配置
+{
+  dataset: { source: [{ name: 'A', value: 10 }] },
+  series: [{ type: 'bar', encode: { x: 'name', y: 'value' } }],
+}
+```
+
+```ts
+// 直接使用 series.data 的配置
+{
+  xAxis: { type: 'category' },
+  yAxis: { type: 'value' },
+  series: [{ type: 'line', data: [10, 20, 30] }],
+}
+```
+
+新的组件逻辑至少不会因为第二类配置缺少 `dataset` 而崩溃。对于第一类配置，绑定的数据源仍可以覆盖 `dataset.source`。这为后续向 Agent 提供 ECharts Schema、物料示例和数据结构知识提供了稳定的渲染接收端。
+
+### 45.8 自动生成声明文件变化
+
+`components.d.ts` 删除了：
+
+```ts
+ElAlert: typeof import('element-plus/es')['ElAlert']
+```
+
+该文件由 `unplugin-vue-components` 生成，用于声明模板中可以直接使用的全局组件。这个变更属于生成结果同步，不是 RAG 或 ECharts 运行时逻辑；后续如果再次生成组件声明，应以实际模板引用自动更新文件。
+
+### 45.9 当前实现注意事项
+
+1. 当前实现解决的是 AI 配置缺少 `dataset` 时的渲染兼容问题，还没有建立向量库、Embedding、召回器或完整的 RAG 链路。
+2. `error` 已从 `useDataSource()` 返回，但模板仍只展示 `loading`，数据请求失败时缺少明确的错误状态。
+3. `chartRef.value` 和 `chart` 在初始化时默认有效，生产代码可以增加 DOM 为空和 ECharts 初始化失败的处理。
+4. `source` 同时兼容 API 返回数据和 option 默认数据，但需要确认 API 返回结构已经经过 `responsePath` 转换为 ECharts 可接受的数组格式。
+5. 如果 AI 生成的是 `series.data` 而不是 `dataset.source`，当前逻辑不会自动把外部数据源改写到 `series.data`，需要在 Schema 和数据绑定规则中明确支持范围。
+6. watcher 使用深度监听，复杂图表 option 变化频繁时可能增加更新开销，后续可以根据数据源变化和配置变化拆分更新策略。
+7. 组件将 `_option` 直接作为返回值的一部分使用，后续若 ECharts 会修改传入对象，应考虑在边界处复制配置，避免影响响应式节点数据。
+
+### 45.10 最终逻辑总结
+
+```text
+AI 或编辑器生成图表 schema
+  -> ChartMaterial 读取 props.option
+  -> 缺少 props.option 时使用 {}
+
+读取数据
+  -> useDataSource(dataId)
+  -> data.value 优先
+  -> 否则使用 option.dataset.source
+
+生成最终 ECharts option
+  -> 没有 source：返回原 option
+  -> 有 source：保留原配置并覆盖 dataset.source
+
+渲染更新
+  -> onMounted 初始化 chart
+  -> 首次 setOption(option.value)
+  -> 后续深度变化且 chart 存在时 setOption(newVal)
+  -> ResizeObserver 变化时 chart.resize()
+```
+
+本节为 ECharts 物料补上了面向 AI 配置的容错边界：图表可以接收带有 `dataset` 的数据驱动配置，也可以安全处理没有 `dataset` 的配置，为后续构建图表知识库和让 Agent 生成可执行图表配置提供了基础。
+
+<!-- 后续内容继续使用同级标题：## 46「...」 -->

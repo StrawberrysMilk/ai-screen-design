@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 
 import type { MaterialSchema } from '@/schema/material.ts'
-import type { PageSchema } from '@/schema/page.ts'
+import type { DataSourceSchema, PageSchema } from '@/schema/page.ts'
 import { useUndoRedo } from '@/composables/useUndoRedo.ts'
 
 export const useEditorStore = defineStore('editor', () => {
@@ -140,6 +140,30 @@ export const useEditorStore = defineStore('editor', () => {
   }
 
   /**
+   * 添加数据源
+   * @param dataSource
+   */
+  function addDataSource(dataSource: DataSourceSchema) {
+    applyChange(dataSources, 'value', [...dataSources.value, dataSource])
+  }
+
+  /**
+   * 更新数据源
+
+   * @param dataSource
+   */
+  function updateDataSource(dataSource: DataSourceSchema) {
+    if (!dataSources.value.some((item) => item.id === dataSource.id)) {
+      throw new Error(`数据源不存在：${dataSource.id}`)
+    }
+    applyChange(
+      dataSources,
+      'value',
+      dataSources.value.map((item) => (item.id === dataSource.id ? dataSource : item)),
+    )
+  }
+
+  /**
    * 删除节点
    * @param node
    */
@@ -214,5 +238,7 @@ export const useEditorStore = defineStore('editor', () => {
     toggleLock,
     updateNode,
     setPage,
+    updateDataSource,
+    addDataSource,
   }
 })
