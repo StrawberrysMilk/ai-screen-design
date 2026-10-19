@@ -26,14 +26,21 @@ const dataId = computed(() => props.schema.dataId)
 const { data, loading, error, refresh } = useDataSource(dataId)
 
 const option = computed(() => {
-  const _option = props.schema.props.option
+  const _option = props.schema.props?.option ?? {}
+  const configuredDataset = _option.dataset
+  const source = data.value ?? configuredDataset?.source
+
+  // AI 生成的图表配置可能没有 dataset。只有存在数据时才注入 dataset，
+  // 否则保留原始 option，避免读取 undefined.source 导致组件渲染失败。
+  if (source === undefined) {
+    return _option
+  }
+
   return {
     ..._option,
     dataset: {
-      ..._option.dataset,
-      // 重写 source，如果数据源中存在这份数据，就使用，否则使用自带的
-      source: data.value || _option.dataset.source,
-      // source: data.value.length ? data.value : _option.dataset.source,
+      ...configuredDataset,
+      source,
     },
   }
 })
@@ -41,6 +48,7 @@ const option = computed(() => {
 watch(
   option,
   (newVal) => {
+    if (!chart) return
     chart.setOption(newVal)
   },
   { deep: true },
